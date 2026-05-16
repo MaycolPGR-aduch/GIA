@@ -1,0 +1,14 @@
+{
+  "camera_index": 0,
+  "fps": 15,
+  "cursor_sensitivity": 1.35,
+  "dead_zone_px": 8,
+  "smoothing_factor": 0.62,
+  "max_cursor_speed_px": 36,
+  "face_stability_threshold": 0.035,
+  "voice_enabled": true,
+  "tts_enabled": false,
+  "high_contrast": false,
+  "font_scale": 1.0,
+  "gesture_window_size": 12
+}

@@ -1,0 +1,63 @@
+{
+  "name": "default",
+  "created_at": "2026-05-16T04:30:30.587251",
+  "updated_at": "2026-05-16T17:55:14.798140",
+  "launcher_completed": true,
+  "neutral_nose": [
+    349.2758620689655,
+    262.2413793103448
+  ],
+  "neutral_face_center": [
+    349.2758620689655,
+    262.2413793103448
+  ],
+  "neutral_face_scale_px": 244.72413793103448,
+  "cursor_sensitivity": 1.35,
+  "dead_zone_px": 8,
+  "smoothing_factor": 0.62,
+  "max_cursor_speed_px": 36,
+  "voice_enabled": true,
+  "tts_enabled": false,
+  "gesture_confidence": {
+    "neutral": 0.65,
+    "left_blink_intent": 0.78,
+    "right_blink_intent": 0.78,
+    "both_eyes_closed_intent": 0.82,
+    "mouth_open_hold": 0.8,
+    "smile": 0.75,
+    "brows_up": 0.75,
+    "confirm": 0.75
+  },
+  "gesture_duration_ms": {
+    "left_blink_intent": 350,
+    "right_blink_intent": 350,
+    "both_eyes_closed_intent": 900,
+    "mouth_open_hold": 700,
+    "smile": 600,
+    "brows_up": 700,
+    "confirm": 650
+  },
+  "gesture_cooldown_ms": {
+    "left_blink_intent": 1200,
+    "right_blink_intent": 1200,
+    "both_eyes_closed_intent": 2200,
+    "mouth_open_hold": 1800,
+    "smile": 1800,
+    "brows_up": 1500,
+    "confirm": 1500
+  },
+  "calibration": {
+    "completed": true,
+    "last_calibrated_at": "2026-05-16 12:41:10",
+    "samples_per_gesture": {
+      "left_blink_intent": 29,
+      "right_blink_intent": 29,
+      "both_eyes_closed_intent": 28,
+      "mouth_open_hold": 29,
+      "smile": 29,
+      "brows_up": 30,
+      "confirm": 30,
+      "neutral": 29
+    }
+  }
+}

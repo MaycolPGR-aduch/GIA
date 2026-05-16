@@ -1,0 +1,13 @@
+{
+  "profile": "default",
+  "sample_counts": {
+    "left_blink_intent": 29,
+    "right_blink_intent": 29,
+    "both_eyes_closed_intent": 28,
+    "mouth_open_hold": 29,
+    "smile": 29,
+    "brows_up": 30,
+    "confirm": 30,
+    "neutral": 29
+  }
+}

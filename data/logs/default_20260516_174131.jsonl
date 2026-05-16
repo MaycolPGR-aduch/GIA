@@ -1,0 +1,3 @@
+{"timestamp": "2026-05-16T17:41:31.830518", "event_type": "session", "detail": "Inicio de sesión", "state": "ready"}
+{"timestamp": "2026-05-16T17:41:32.906604", "event_type": "runtime", "detail": "Runtime iniciado", "profile": "default"}
+{"timestamp": "2026-05-16T17:45:50.237135", "event_type": "session", "detail": "Fin de sesión", "state": "stopped"}
