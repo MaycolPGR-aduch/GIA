@@ -21,10 +21,34 @@ VOICE_ALIASES = {
         "recalibrar cursor",
         "recentrar cursor",
     ],
+    "cursor_on": [
+        "activar cursor",
+        "encender cursor",
+        "habilitar cursor",
+        "mover cursor",
+    ],
+    "cursor_off": [
+        "congelar cursor",
+        "desactivar cursor",
+        "detener cursor",
+        "apagar cursor",
+    ],
     "guide": [
         "abrir guia",
         "mostrar guia",
         "ver guia",
+    ],
+    "compact_ui": [
+        "estamos listos",
+        "modo compacto",
+        "minimizar interfaz",
+        "comenzar a usar la pc",
+    ],
+    "expand_ui": [
+        "volvamos",
+        "restaurar interfaz",
+        "volver a la interfaz",
+        "mostrar interfaz",
     ],
     "quit": [
         "cerrar sistema",

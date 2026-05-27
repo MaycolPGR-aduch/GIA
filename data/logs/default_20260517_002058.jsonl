@@ -1,0 +1,15 @@
+{"timestamp": "2026-05-17T00:20:58.877560", "event_type": "session", "detail": "Inicio de sesión", "state": "ready"}
+{"timestamp": "2026-05-17T00:20:59.794101", "event_type": "runtime", "detail": "Runtime iniciado", "profile": "default"}
+{"timestamp": "2026-05-17T00:21:13.969638", "event_type": "heuristic", "detail": "Cursor recentrado"}
+{"timestamp": "2026-05-17T00:21:20.104724", "event_type": "state", "detail": "Cambio de pausa", "state": "paused"}
+{"timestamp": "2026-05-17T00:21:23.082809", "event_type": "state", "detail": "Cambio de pausa", "state": "ready"}
+{"timestamp": "2026-05-17T00:21:29.691829", "event_type": "cursor", "detail": "Cambio de clutch", "cursor_active": true}
+{"timestamp": "2026-05-17T00:21:59.119687", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "both_eyes_closed_intent", "confidence": 0.38}
+{"timestamp": "2026-05-17T00:21:59.182977", "event_type": "voice", "detail": "Inicio escucha"}
+{"timestamp": "2026-05-17T00:22:01.332968", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "both_eyes_closed_intent", "confidence": 0.46}
+{"timestamp": "2026-05-17T00:22:03.112193", "event_type": "voice", "detail": "Sin audio reconocido"}
+{"timestamp": "2026-05-17T00:22:04.122157", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "both_eyes_closed_intent", "confidence": 0.283}
+{"timestamp": "2026-05-17T00:22:04.173936", "event_type": "voice", "detail": "Inicio escucha"}
+{"timestamp": "2026-05-17T00:22:07.851106", "event_type": "voice", "detail": "Comando transcrito", "text": "Estamos listos", "command_id": "compact_ui", "confidence": 1.0}
+{"timestamp": "2026-05-17T00:25:35.404020", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.517}
+{"timestamp": "2026-05-17T00:25:42.941367", "event_type": "session", "detail": "Fin de sesión", "state": "stopped"}

@@ -1,0 +1,5 @@
+{"timestamp": "2026-05-16T23:22:19.506319", "event_type": "session", "detail": "Inicio de sesión", "state": "ready"}
+{"timestamp": "2026-05-16T23:22:20.469997", "event_type": "runtime", "detail": "Runtime iniciado", "profile": "default"}
+{"timestamp": "2026-05-16T23:22:54.770055", "event_type": "cursor", "detail": "Cambio de clutch", "cursor_active": true}
+{"timestamp": "2026-05-16T23:24:42.707379", "event_type": "cursor", "detail": "Cambio de clutch", "cursor_active": false}
+{"timestamp": "2026-05-16T23:24:50.121303", "event_type": "session", "detail": "Fin de sesión", "state": "stopped"}

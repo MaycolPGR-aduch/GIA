@@ -18,7 +18,7 @@ from .gesture_catalog import GESTURE_CATALOG
 from .gesture_ml import GestureClassifier
 from .heuristic_engine import HeuristicEngine
 from .landmark_provider import LandmarkProvider
-from .models import AppState, FaceSample
+from .models import AppState, FaceSample, GesturePrediction
 from .session_logger import SessionLogger
 from .voice_router import resolve_command
 
@@ -61,6 +61,8 @@ class AssistiveController:
         pyautogui.FAILSAFE = False
         self.screen_width, self.screen_height = pyautogui.size()
         self.current_cursor_x, self.current_cursor_y = pyautogui.position()
+        self.cursor_active = bool(profile.get("cursor_starts_active", False))
+        self.mirror_preview = bool(profile.get("mirror_preview", True))
 
         self.audio_endpoint = self._configure_audio()
         self.tts_enabled = bool(profile.get("tts_enabled", False))
@@ -69,6 +71,16 @@ class AssistiveController:
         self.whisper = WhisperModel("base", device="cpu", compute_type="int8") if self.voice_enabled else None
 
         self.cap = None
+        self.last_voice_text = "-"
+        self.last_voice_command = "-"
+        self.last_voice_state = "en espera"
+        self.hybrid_eye_closed_confidence_floor = 0.18
+        self.hybrid_eye_closed_ratio_max = 0.19
+        self.hybrid_eye_closed_asymmetry_max = 0.08
+        self.heuristic_blink_closed_ratio = 0.17
+        self.heuristic_blink_open_ratio = 0.20
+        self.heuristic_blink_asymmetry_min = 0.04
+        self.heuristic_blink_confidence = 0.72
 
     def _ui_available(self) -> bool:
         if self.main_gui_interface is None:
@@ -130,6 +142,18 @@ class AssistiveController:
         except Exception as exc:
             print(f"Error reproduciendo TTS: {exc}")
 
+    def toggle_cursor_control(self):
+        self.cursor_active = not self.cursor_active
+        self.logger.log("cursor", "Cambio de clutch", cursor_active=self.cursor_active)
+        self.hablar("Cursor activado." if self.cursor_active else "Cursor congelado.")
+
+    def set_cursor_control(self, enabled: bool):
+        if self.cursor_active == enabled:
+            return
+        self.cursor_active = enabled
+        self.logger.log("cursor", "Cursor configurado", cursor_active=self.cursor_active)
+        self.hablar("Cursor activado." if self.cursor_active else "Cursor congelado.")
+
     def toggle_pause(self):
         self.state = AppState.READY if self.state == AppState.PAUSED else AppState.PAUSED
         self.logger.log("state", "Cambio de pausa", state=self.state.value)
@@ -163,8 +187,21 @@ class AssistiveController:
             control_state = self.heuristics.update(snapshot.face_sample)
             prediction = self._evaluate_gesture(snapshot.face_sample, control_state)
             self._apply_continuous_control(control_state)
-            frame_rgb = self._render_overlay(snapshot.frame_rgb, snapshot.face_sample, control_state, prediction)
-            self._push_gui_frame(frame_rgb)
+            frame_rgb = self._render_overlay(
+                snapshot.frame_rgb,
+                snapshot.face_sample,
+                control_state,
+                prediction,
+                compact=False,
+            )
+            compact_frame_rgb = self._render_overlay(
+                snapshot.frame_rgb,
+                snapshot.face_sample,
+                control_state,
+                prediction,
+                compact=True,
+            )
+            self._push_gui_frame(frame_rgb, compact_frame_rgb)
 
             elapsed = time.monotonic() - loop_start
             if elapsed < frame_delay:
@@ -177,8 +214,18 @@ class AssistiveController:
 
         self.gesture_window.append(sample)
         prediction = self.classifier.predict(self.gesture_window)
+        heuristic_prediction = self._build_heuristic_blink_prediction(sample)
+        if self._should_use_heuristic_blink(prediction, heuristic_prediction):
+            prediction = heuristic_prediction
         if prediction is None:
-            self._push_status(control_state.status_text, "-", 0.0, face="rostro detectado", mode=self.state.value)
+            self._push_status(
+                control_state.status_text,
+                "-",
+                0.0,
+                face="rostro detectado",
+                mode=self.state.value,
+                cursor=self._cursor_status_text(),
+            )
             return None
 
         if prediction.gesture_id == "neutral":
@@ -191,11 +238,13 @@ class AssistiveController:
                 prediction.confidence,
                 face="estable" if control_state.face_stable else "inestable",
                 mode=self.state.value,
+                cursor=self._cursor_status_text(),
             )
             return prediction
 
         threshold = float(self.gesture_thresholds.get(prediction.gesture_id, 0.8))
         now = time.monotonic()
+        hybrid_allowed = self._passes_hybrid_gesture_validation(prediction, sample)
 
         if not control_state.face_stable:
             prediction.reason = "Rostro inestable"
@@ -205,10 +254,11 @@ class AssistiveController:
                 prediction.confidence,
                 face="inestable",
                 mode=self.state.value,
+                cursor=self._cursor_status_text(),
             )
             return prediction
 
-        if prediction.confidence < threshold:
+        if prediction.confidence < threshold and not hybrid_allowed:
             prediction.reason = "Confianza baja"
             self._push_status(
                 "Gesto rechazado por baja confianza.",
@@ -216,8 +266,19 @@ class AssistiveController:
                 prediction.confidence,
                 face="estable",
                 mode=self.state.value,
+                cursor=self._cursor_status_text(),
             )
             return prediction
+        if prediction.confidence < threshold and hybrid_allowed:
+            prediction.reason = "Aceptado por validacion hibrida"
+            self._push_status(
+                "Gesto validado por soporte heuristico.",
+                prediction.gesture_id,
+                prediction.confidence,
+                face="estable",
+                mode=self.state.value,
+                cursor=self._cursor_status_text(),
+            )
 
         if prediction.gesture_id != self.current_gesture:
             self.current_gesture = prediction.gesture_id
@@ -229,6 +290,7 @@ class AssistiveController:
                 prediction.confidence,
                 face="estable",
                 mode=self.state.value,
+                cursor=self._cursor_status_text(),
             )
             return prediction
 
@@ -241,6 +303,7 @@ class AssistiveController:
                 prediction.confidence,
                 face="estable",
                 mode=self.state.value,
+                cursor=self._cursor_status_text(),
             )
             return prediction
 
@@ -254,6 +317,7 @@ class AssistiveController:
                 prediction.confidence,
                 face="estable",
                 mode=self.state.value,
+                cursor=self._cursor_status_text(),
             )
             return prediction
 
@@ -265,6 +329,7 @@ class AssistiveController:
                 prediction.confidence,
                 face="estable",
                 mode=self.state.value,
+                cursor=self._cursor_status_text(),
             )
             return prediction
 
@@ -283,11 +348,12 @@ class AssistiveController:
             prediction.confidence,
             face="estable",
             mode=self.state.value,
+            cursor=self._cursor_status_text(),
         )
         return prediction
 
     def _apply_continuous_control(self, control_state):
-        if self.state != AppState.READY or not control_state.face_present:
+        if self.state != AppState.READY or not control_state.face_present or not self.cursor_active:
             return
         if abs(control_state.smoothed_dx) < 0.5 and abs(control_state.smoothed_dy) < 0.5:
             return
@@ -303,8 +369,7 @@ class AssistiveController:
         elif gesture_id == "both_eyes_closed_intent":
             self._start_voice_listener()
         elif gesture_id == "mouth_open_hold":
-            if self.main_gui_interface:
-                self.main_gui_interface.show_guide_dialog()
+            self.toggle_cursor_control()
         elif gesture_id == "smile":
             self.recenter()
         elif gesture_id == "brows_up":
@@ -314,7 +379,18 @@ class AssistiveController:
 
     def _start_voice_listener(self):
         if not self.voice_enabled or self.whisper is None:
-            self._push_status("Voz deshabilitada en este perfil.", "-", 0.0, face="estable", mode=self.state.value)
+            self.last_voice_state = "deshabilitada"
+            self._push_status(
+                "Voz deshabilitada en este perfil.",
+                "-",
+                0.0,
+                face="estable",
+                mode=self.state.value,
+                cursor=self._cursor_status_text(),
+                voice_state=self.last_voice_state,
+                voice_text=self.last_voice_text,
+                voice_command=self.last_voice_command,
+            )
             return
         if self.voice_thread and self.voice_thread.is_alive():
             return
@@ -323,6 +399,20 @@ class AssistiveController:
 
     def _listen_once(self):
         self.state = AppState.LISTENING
+        self.last_voice_state = "escuchando"
+        self.last_voice_text = "-"
+        self.last_voice_command = "-"
+        self._push_status(
+            "Escuchando comando de voz...",
+            "-",
+            0.0,
+            face="estable",
+            mode=self.state.value,
+            cursor=self._cursor_status_text(),
+            voice_state=self.last_voice_state,
+            voice_text=self.last_voice_text,
+            voice_command=self.last_voice_command,
+        )
         self.hablar("Escuchando.")
         self.logger.log("voice", "Inicio escucha")
         try:
@@ -335,11 +425,27 @@ class AssistiveController:
             text = " ".join(segment.text.strip() for segment in segments).strip()
             if not text:
                 self.logger.log("voice", "Sin audio reconocido")
-                self._push_status("No se escuchó un comando.", "-", 0.0, face="estable", mode=self.state.value)
+                self.last_voice_state = "sin audio reconocido"
+                self.last_voice_text = "(sin audio)"
+                self.last_voice_command = "-"
+                self._push_status(
+                    "No se escuchó un comando.",
+                    "-",
+                    0.0,
+                    face="estable",
+                    mode=self.state.value,
+                    cursor=self._cursor_status_text(),
+                    voice_state=self.last_voice_state,
+                    voice_text=self.last_voice_text,
+                    voice_command=self.last_voice_command,
+                )
                 return
             command_id, confidence = resolve_command(text)
+            self.last_voice_text = text
+            self.last_voice_command = command_id or "-"
             self.logger.log("voice", "Comando transcrito", text=text, command_id=command_id, confidence=confidence)
             if command_id and confidence >= 0.68:
+                self.last_voice_state = "comando reconocido"
                 self._execute_voice_command(command_id)
                 self._push_status(
                     f"Comando de voz: {command_id}",
@@ -347,15 +453,45 @@ class AssistiveController:
                     confidence,
                     face="estable",
                     mode=self.state.value,
+                    cursor=self._cursor_status_text(),
+                    voice_state=self.last_voice_state,
+                    voice_text=self.last_voice_text,
+                    voice_command=self.last_voice_command,
                 )
             else:
-                self._push_status("Comando de voz no reconocido.", "-", confidence, face="estable", mode=self.state.value)
+                self.last_voice_state = "comando no reconocido"
+                self._push_status(
+                    "Comando de voz no reconocido.",
+                    "-",
+                    confidence,
+                    face="estable",
+                    mode=self.state.value,
+                    cursor=self._cursor_status_text(),
+                    voice_state=self.last_voice_state,
+                    voice_text=self.last_voice_text,
+                    voice_command=self.last_voice_command,
+                )
         except Exception as exc:
             self.logger.log("error", "Fallo en voz", error=str(exc))
-            self._push_status(f"Error en voz: {exc}", "-", 0.0, face="estable", mode=self.state.value)
+            self.last_voice_state = "error"
+            self.last_voice_text = str(exc)
+            self.last_voice_command = "-"
+            self._push_status(
+                f"Error en voz: {exc}",
+                "-",
+                0.0,
+                face="estable",
+                mode=self.state.value,
+                cursor=self._cursor_status_text(),
+                voice_state=self.last_voice_state,
+                voice_text=self.last_voice_text,
+                voice_command=self.last_voice_command,
+            )
         finally:
             if self.state == AppState.LISTENING:
                 self.state = AppState.READY
+            if self.last_voice_state == "escuchando":
+                self.last_voice_state = "en espera"
 
     def _execute_voice_command(self, command_id: str):
         if command_id == "pause":
@@ -366,8 +502,16 @@ class AssistiveController:
                 self.toggle_pause()
         elif command_id == "recenter":
             self.recenter()
+        elif command_id == "cursor_on":
+            self.set_cursor_control(True)
+        elif command_id == "cursor_off":
+            self.set_cursor_control(False)
         elif command_id == "guide" and self.main_gui_interface:
             self.main_gui_interface.show_guide_dialog()
+        elif command_id == "compact_ui" and self.main_gui_interface:
+            self.main_gui_interface.root.after(0, self.main_gui_interface.enter_compact_mode)
+        elif command_id == "expand_ui" and self.main_gui_interface:
+            self.main_gui_interface.root.after(0, self.main_gui_interface.exit_compact_mode)
         elif command_id == "quit":
             self.stop()
             if self.main_gui_interface:
@@ -392,26 +536,55 @@ class AssistiveController:
         except Exception as exc:
             self.logger.log("error", "No se pudo cambiar volumen", error=str(exc))
 
-    def _render_overlay(self, frame_rgb, sample, control_state, prediction):
+    def _render_overlay(self, frame_rgb, sample, control_state, prediction, compact: bool = False):
         frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-        if sample is not None:
+        frame_height, frame_width = frame_bgr.shape[:2]
+        frame_center = (frame_width // 2, frame_height // 2)
+        neutral_point = (
+            int(self.heuristics.neutral_nose[0]) if self.heuristics.neutral_nose else frame_center[0],
+            int(self.heuristics.neutral_nose[1]) if self.heuristics.neutral_nose else frame_center[1],
+        )
+
+        cv2.line(frame_bgr, (frame_center[0] - 18, frame_center[1]), (frame_center[0] + 18, frame_center[1]), (255, 180, 0), 1)
+        cv2.line(frame_bgr, (frame_center[0], frame_center[1] - 18), (frame_center[0], frame_center[1] + 18), (255, 180, 0), 1)
+        cv2.circle(frame_bgr, frame_center, 4, (255, 180, 0), 1)
+        cv2.circle(frame_bgr, neutral_point, 8, (255, 0, 255), 2)
+        cv2.line(frame_bgr, (neutral_point[0] - 10, neutral_point[1]), (neutral_point[0] + 10, neutral_point[1]), (255, 0, 255), 2)
+        cv2.line(frame_bgr, (neutral_point[0], neutral_point[1] - 10), (neutral_point[0], neutral_point[1] + 10), (255, 0, 255), 2)
+
+        if sample is not None and not compact:
             for point in sample.points_px.values():
                 cv2.circle(frame_bgr, point, 1, (60, 255, 80), -1)
             cv2.circle(frame_bgr, sample.nose_px, 5, (0, 128, 255), -1)
+        if self.mirror_preview:
+            frame_bgr = cv2.flip(frame_bgr, 1)
+
+        if compact:
+            return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
         cv2.putText(frame_bgr, f"Estado: {self.state.value}", (16, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(frame_bgr, f"{control_state.status_text}", (16, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(
+            frame_bgr,
+            f"{control_state.status_text} | cursor: {self._cursor_status_text()}",
+            (16, 56),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            2,
+        )
+        cv2.putText(frame_bgr, "Centro camara", (16, 84), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 180, 0), 2)
+        cv2.putText(frame_bgr, "Referencia cursor", (16, 108), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 0, 255), 2)
         if prediction is not None:
             cv2.putText(
                 frame_bgr,
                 f"Gesto: {prediction.gesture_id} ({prediction.confidence:.2f})",
-                (16, 84),
+                (16, 132),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
                 (255, 220, 140),
                 2,
             )
-        metric_y = 116
+        metric_y = 164
         for key, value in control_state.debug_metrics.items():
             cv2.putText(
                 frame_bgr,
@@ -425,21 +598,105 @@ class AssistiveController:
             metric_y += 22
         return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
-    def _push_gui_frame(self, frame_rgb):
+    def _cursor_status_text(self) -> str:
+        return "activo" if self.cursor_active else "congelado"
+
+    def _build_heuristic_blink_prediction(self, sample: FaceSample | None) -> GesturePrediction | None:
+        if sample is None:
+            return None
+
+        left_eye_ratio = float(sample.metrics.get("left_eye_ratio", 1.0))
+        right_eye_ratio = float(sample.metrics.get("right_eye_ratio", 1.0))
+        asymmetry = abs(left_eye_ratio - right_eye_ratio)
+
+        if (
+            left_eye_ratio <= self.hybrid_eye_closed_ratio_max
+            and right_eye_ratio <= self.hybrid_eye_closed_ratio_max
+        ):
+            return None
+
+        if (
+            left_eye_ratio <= self.heuristic_blink_closed_ratio
+            and right_eye_ratio >= self.heuristic_blink_open_ratio
+            and (right_eye_ratio - left_eye_ratio) >= self.heuristic_blink_asymmetry_min
+            and asymmetry >= self.heuristic_blink_asymmetry_min
+        ):
+            return GesturePrediction(
+                gesture_id="left_blink_intent",
+                confidence=self.heuristic_blink_confidence,
+                accepted=False,
+                reason="Fallback heuristico ocular",
+            )
+
+        if (
+            right_eye_ratio <= self.heuristic_blink_closed_ratio
+            and left_eye_ratio >= self.heuristic_blink_open_ratio
+            and (left_eye_ratio - right_eye_ratio) >= self.heuristic_blink_asymmetry_min
+            and asymmetry >= self.heuristic_blink_asymmetry_min
+        ):
+            return GesturePrediction(
+                gesture_id="right_blink_intent",
+                confidence=self.heuristic_blink_confidence,
+                accepted=False,
+                reason="Fallback heuristico ocular",
+            )
+        return None
+
+    def _should_use_heuristic_blink(
+        self,
+        prediction: GesturePrediction | None,
+        heuristic_prediction: GesturePrediction | None,
+    ) -> bool:
+        if heuristic_prediction is None:
+            return False
+        if prediction is None:
+            return True
+        if prediction.gesture_id == "neutral":
+            return True
+        if prediction.gesture_id not in {"left_blink_intent", "right_blink_intent"}:
+            return False
+        threshold = float(self.gesture_thresholds.get(prediction.gesture_id, 0.5))
+        return prediction.confidence < threshold
+
+    def _passes_hybrid_gesture_validation(self, prediction, sample: FaceSample | None) -> bool:
+        if sample is None:
+            return False
+        if prediction.gesture_id != "both_eyes_closed_intent":
+            return False
+        left_eye_ratio = float(sample.metrics.get("left_eye_ratio", 1.0))
+        right_eye_ratio = float(sample.metrics.get("right_eye_ratio", 1.0))
+        mean_ratio = (left_eye_ratio + right_eye_ratio) / 2.0
+        asymmetry = abs(left_eye_ratio - right_eye_ratio)
+        return (
+            prediction.confidence >= self.hybrid_eye_closed_confidence_floor
+            and left_eye_ratio <= self.hybrid_eye_closed_ratio_max
+            and right_eye_ratio <= self.hybrid_eye_closed_ratio_max
+            and mean_ratio <= self.hybrid_eye_closed_ratio_max
+            and asymmetry <= self.hybrid_eye_closed_asymmetry_max
+        )
+
+    def _push_gui_frame(self, frame_rgb, compact_frame_rgb=None):
         if not self._ui_available():
             return
         try:
-            self.main_gui_interface.root.after(0, lambda: self.main_gui_interface.update_video_feed(frame_rgb))
+            self.main_gui_interface.root.after(
+                0,
+                lambda: self.main_gui_interface.update_video_feed(frame_rgb, compact_frame_rgb),
+            )
         except Exception:
             pass
 
-    def _push_status(self, status_text, gesture, confidence, *, face="-", mode=None):
+    def _push_status(self, status_text, gesture, confidence, *, face="-", mode=None, cursor=None, voice_state=None, voice_text=None, voice_command=None):
         payload = {
             "status_text": status_text,
             "gesture": gesture,
             "confidence": f"{confidence:.2f}" if isinstance(confidence, (int, float)) else confidence,
             "face": face,
             "mode": mode or self.state.value,
+            "cursor": cursor or self._cursor_status_text(),
+            "voice_state": voice_state or self.last_voice_state,
+            "voice_text": voice_text or self.last_voice_text,
+            "voice_command": voice_command or self.last_voice_command,
             "state": self.state.value,
         }
         if not self._ui_available():

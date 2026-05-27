@@ -1,0 +1,56 @@
+{
+  "profile": "default",
+  "active_version": 3,
+  "versions": [
+    {
+      "version": 1,
+      "trained_at": "2026-05-16T23:40:59.201961",
+      "model_path": "default_gesture_model_v1.pkl",
+      "dataset_path": "default_landmark_dataset_v1.json",
+      "classes": [
+        "both_eyes_closed_intent",
+        "brows_up",
+        "confirm",
+        "left_blink_intent",
+        "mouth_open_hold",
+        "right_blink_intent",
+        "smile"
+      ],
+      "training_windows": 123
+    },
+    {
+      "version": 2,
+      "trained_at": "2026-05-16T23:42:17.545156",
+      "model_path": "default_gesture_model_v2.pkl",
+      "dataset_path": "default_landmark_dataset_v2.json",
+      "classes": [
+        "both_eyes_closed_intent",
+        "brows_up",
+        "confirm",
+        "left_blink_intent",
+        "mouth_open_hold",
+        "neutral",
+        "right_blink_intent",
+        "smile"
+      ],
+      "training_windows": 147
+    },
+    {
+      "version": 3,
+      "trained_at": "2026-05-17T00:20:52.415174",
+      "model_path": "default_gesture_model_v3.pkl",
+      "dataset_path": "default_landmark_dataset_v3.json",
+      "classes": [
+        "both_eyes_closed_intent",
+        "brows_up",
+        "confirm",
+        "left_blink_intent",
+        "mouth_open_hold",
+        "neutral",
+        "right_blink_intent",
+        "smile"
+      ],
+      "training_windows": 147
+    }
+  ]
+}

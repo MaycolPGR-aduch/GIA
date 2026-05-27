@@ -1,0 +1,28 @@
+{
+  "profile": "test_versioning_profile",
+  "active_version": 2,
+  "versions": [
+    {
+      "version": 1,
+      "trained_at": "2026-05-17T00:34:04.915505",
+      "model_path": "test_versioning_profile_gesture_model_v1.pkl",
+      "dataset_path": "test_versioning_profile_landmark_dataset_v1.json",
+      "classes": [
+        "left_blink_intent",
+        "neutral"
+      ],
+      "training_windows": 6
+    },
+    {
+      "version": 2,
+      "trained_at": "2026-05-17T00:34:05.310275",
+      "model_path": "test_versioning_profile_gesture_model_v2.pkl",
+      "dataset_path": "test_versioning_profile_landmark_dataset_v2.json",
+      "classes": [
+        "left_blink_intent",
+        "neutral"
+      ],
+      "training_windows": 6
+    }
+  ]
+}

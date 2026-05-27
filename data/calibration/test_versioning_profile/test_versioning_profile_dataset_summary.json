@@ -1,0 +1,53 @@
+{
+  "profile": "test_versioning_profile",
+  "active_version": 2,
+  "registry_path": "D:\\IEEE-Movilidad-reducidad\\ProyectoGIA-main\\GIA\\data\\calibration\\test_versioning_profile\\model_registry.json",
+  "versions": [
+    {
+      "version": 1,
+      "trained_at": "2026-05-17T00:34:04.915505",
+      "model_path": "test_versioning_profile_gesture_model_v1.pkl",
+      "dataset_path": "test_versioning_profile_landmark_dataset_v1.json",
+      "classes": [
+        "left_blink_intent",
+        "neutral"
+      ],
+      "training_windows": 6
+    },
+    {
+      "version": 2,
+      "trained_at": "2026-05-17T00:34:05.310275",
+      "model_path": "test_versioning_profile_gesture_model_v2.pkl",
+      "dataset_path": "test_versioning_profile_landmark_dataset_v2.json",
+      "classes": [
+        "left_blink_intent",
+        "neutral"
+      ],
+      "training_windows": 6
+    }
+  ],
+  "training_summary": {
+    "profile": "test_versioning_profile",
+    "version": 2,
+    "trained_at": "2026-05-17T00:34:05.310275",
+    "window_size": 4,
+    "feature_dim": 315,
+    "training_windows": 6,
+    "classes": [
+      "left_blink_intent",
+      "neutral"
+    ],
+    "windows_per_class": {
+      "neutral": 3,
+      "left_blink_intent": 3
+    },
+    "model_type": "RandomForestClassifier",
+    "n_estimators": 300,
+    "model_path": "D:\\IEEE-Movilidad-reducidad\\ProyectoGIA-main\\GIA\\data\\calibration\\test_versioning_profile\\test_versioning_profile_gesture_model_v2.pkl",
+    "dataset_path": "D:\\IEEE-Movilidad-reducidad\\ProyectoGIA-main\\GIA\\data\\calibration\\test_versioning_profile\\test_versioning_profile_landmark_dataset_v2.json"
+  },
+  "sample_counts": {
+    "neutral": 6,
+    "left_blink_intent": 6
+  }
+}

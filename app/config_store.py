@@ -15,7 +15,6 @@ LOG_DIR = DATA_DIR / "logs"
 MODEL_DIR = DATA_DIR / "models"
 
 SETTINGS_PATH = CONFIG_DIR / "settings.json"
-GESTURE_MODEL_PATH = MODEL_DIR / "gesture_model.pkl"
 FACE_LANDMARKER_MODEL_PATH = MODEL_DIR / "face_landmarker.task"
 
 
@@ -46,17 +45,21 @@ DEFAULT_PROFILE = {
     "dead_zone_px": 8,
     "smoothing_factor": 0.62,
     "max_cursor_speed_px": 36,
+    "invert_x": True,
+    "invert_y": False,
+    "mirror_preview": True,
+    "cursor_starts_active": False,
     "voice_enabled": True,
     "tts_enabled": False,
     "gesture_confidence": {
-        "neutral": 0.65,
-        "left_blink_intent": 0.78,
-        "right_blink_intent": 0.78,
-        "both_eyes_closed_intent": 0.82,
-        "mouth_open_hold": 0.80,
-        "smile": 0.75,
-        "brows_up": 0.75,
-        "confirm": 0.75,
+        "neutral": 0.50,
+        "left_blink_intent": 0.50,
+        "right_blink_intent": 0.50,
+        "both_eyes_closed_intent": 0.50,
+        "mouth_open_hold": 0.50,
+        "smile": 0.50,
+        "brows_up": 0.50,
+        "confirm": 0.50,
     },
     "gesture_duration_ms": {
         "left_blink_intent": 350,
@@ -80,6 +83,10 @@ DEFAULT_PROFILE = {
         "completed": False,
         "last_calibrated_at": None,
         "samples_per_gesture": {},
+        "active_model_version": None,
+        "active_model_path": None,
+        "active_dataset_path": None,
+        "model_versions": [],
     },
 }
 
@@ -130,6 +137,11 @@ def load_profile(profile_name: str) -> dict:
     profile = deepcopy(DEFAULT_PROFILE)
     profile["name"] = profile_name
     profile.update(_read_json(profile_path))
+    profile["calibration"] = {**deepcopy(DEFAULT_PROFILE["calibration"]), **profile.get("calibration", {})}
+    profile["gesture_confidence"] = {
+        key: min(0.50, float(value))
+        for key, value in {**deepcopy(DEFAULT_PROFILE["gesture_confidence"]), **profile.get("gesture_confidence", {})}.items()
+    }
     if not profile.get("created_at"):
         profile["created_at"] = datetime.utcnow().isoformat()
     profile["updated_at"] = datetime.utcnow().isoformat()
@@ -142,6 +154,7 @@ def save_profile(profile: dict) -> None:
     payload = deepcopy(DEFAULT_PROFILE)
     payload["name"] = profile.get("name", "default")
     payload.update(profile)
+    payload["calibration"] = {**deepcopy(DEFAULT_PROFILE["calibration"]), **payload.get("calibration", {})}
     payload["updated_at"] = datetime.utcnow().isoformat()
     if not payload.get("created_at"):
         payload["created_at"] = payload["updated_at"]
@@ -156,12 +169,34 @@ def build_default_profile(profile_name: str) -> dict:
     return profile
 
 
-def calibration_samples_path(profile_name: str) -> Path:
-    return CALIBRATION_DIR / f"{profile_name}_samples.json"
+def profile_calibration_dir(profile_name: str) -> Path:
+    path = CALIBRATION_DIR / profile_name
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
-def profile_model_path(profile_name: str) -> Path:
+def model_registry_path(profile_name: str) -> Path:
+    return profile_calibration_dir(profile_name) / "model_registry.json"
+
+
+def versioned_model_path(profile_name: str, version: int) -> Path:
+    return profile_calibration_dir(profile_name) / f"{profile_name}_gesture_model_v{version}.pkl"
+
+
+def versioned_dataset_path(profile_name: str, version: int) -> Path:
+    return profile_calibration_dir(profile_name) / f"{profile_name}_landmark_dataset_v{version}.json"
+
+
+def active_dataset_summary_path(profile_name: str) -> Path:
+    return profile_calibration_dir(profile_name) / f"{profile_name}_dataset_summary.json"
+
+
+def legacy_model_path(profile_name: str) -> Path:
     return CALIBRATION_DIR / f"{profile_name}_gesture_model.pkl"
+
+
+def legacy_dataset_summary_path(profile_name: str) -> Path:
+    return CALIBRATION_DIR / f"{profile_name}_samples.json"
 
 
 def session_log_path(profile_name: str) -> Path:

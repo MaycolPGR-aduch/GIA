@@ -1,0 +1,7 @@
+{"timestamp": "2026-05-16T23:42:24.993792", "event_type": "session", "detail": "Inicio de sesión", "state": "ready"}
+{"timestamp": "2026-05-16T23:42:25.967418", "event_type": "runtime", "detail": "Runtime iniciado", "profile": "default"}
+{"timestamp": "2026-05-16T23:42:48.964441", "event_type": "state", "detail": "Cambio de pausa", "state": "paused"}
+{"timestamp": "2026-05-16T23:43:20.678753", "event_type": "cursor", "detail": "Cambio de clutch", "cursor_active": true}
+{"timestamp": "2026-05-16T23:43:41.121070", "event_type": "state", "detail": "Cambio de pausa", "state": "ready"}
+{"timestamp": "2026-05-16T23:45:16.407692", "event_type": "heuristic", "detail": "Cursor recentrado"}
+{"timestamp": "2026-05-16T23:47:43.991626", "event_type": "session", "detail": "Fin de sesión", "state": "stopped"}

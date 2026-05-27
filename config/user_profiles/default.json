@@ -1,32 +1,36 @@
 {
   "name": "default",
   "created_at": "2026-05-16T04:30:30.587251",
-  "updated_at": "2026-05-16T17:55:14.798140",
+  "updated_at": "2026-05-17T06:42:31.185378",
   "launcher_completed": true,
   "neutral_nose": [
-    349.2758620689655,
-    262.2413793103448
+    431.62857142857143,
+    322.3142857142857
   ],
   "neutral_face_center": [
-    349.2758620689655,
-    262.2413793103448
+    431.62857142857143,
+    322.3142857142857
   ],
-  "neutral_face_scale_px": 244.72413793103448,
-  "cursor_sensitivity": 1.35,
+  "neutral_face_scale_px": 197.05714285714285,
+  "cursor_sensitivity": 1.3024464831804283,
   "dead_zone_px": 8,
   "smoothing_factor": 0.62,
   "max_cursor_speed_px": 36,
+  "invert_x": true,
+  "invert_y": false,
+  "mirror_preview": true,
+  "cursor_starts_active": false,
   "voice_enabled": true,
   "tts_enabled": false,
   "gesture_confidence": {
-    "neutral": 0.65,
-    "left_blink_intent": 0.78,
-    "right_blink_intent": 0.78,
-    "both_eyes_closed_intent": 0.82,
-    "mouth_open_hold": 0.8,
-    "smile": 0.75,
-    "brows_up": 0.75,
-    "confirm": 0.75
+    "neutral": 0.5,
+    "left_blink_intent": 0.5,
+    "right_blink_intent": 0.5,
+    "both_eyes_closed_intent": 0.5,
+    "mouth_open_hold": 0.5,
+    "smile": 0.5,
+    "brows_up": 0.5,
+    "confirm": 0.5
   },
   "gesture_duration_ms": {
     "left_blink_intent": 350,
@@ -48,16 +52,24 @@
   },
   "calibration": {
     "completed": true,
-    "last_calibrated_at": "2026-05-16 12:41:10",
+    "last_calibrated_at": "2026-05-16 19:20:52",
     "samples_per_gesture": {
-      "left_blink_intent": 29,
+      "left_blink_intent": 28,
       "right_blink_intent": 29,
-      "both_eyes_closed_intent": 28,
+      "both_eyes_closed_intent": 29,
       "mouth_open_hold": 29,
       "smile": 29,
-      "brows_up": 30,
-      "confirm": 30,
-      "neutral": 29
-    }
+      "brows_up": 28,
+      "confirm": 28,
+      "neutral": 35
+    },
+    "active_model_version": 3,
+    "active_model_path": "D:\\IEEE-Movilidad-reducidad\\ProyectoGIA-main\\GIA\\data\\calibration\\default\\default_gesture_model_v3.pkl",
+    "active_dataset_path": "D:\\IEEE-Movilidad-reducidad\\ProyectoGIA-main\\GIA\\data\\calibration\\default\\default_landmark_dataset_v3.json",
+    "model_versions": [
+      1,
+      2,
+      3
+    ]
   }
 }

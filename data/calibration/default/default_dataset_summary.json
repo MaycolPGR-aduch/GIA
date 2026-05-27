@@ -1,0 +1,99 @@
+{
+  "profile": "default",
+  "active_version": 3,
+  "registry_path": "D:\\IEEE-Movilidad-reducidad\\ProyectoGIA-main\\GIA\\data\\calibration\\default\\model_registry.json",
+  "versions": [
+    {
+      "version": 1,
+      "trained_at": "2026-05-16T23:40:59.201961",
+      "model_path": "default_gesture_model_v1.pkl",
+      "dataset_path": "default_landmark_dataset_v1.json",
+      "classes": [
+        "both_eyes_closed_intent",
+        "brows_up",
+        "confirm",
+        "left_blink_intent",
+        "mouth_open_hold",
+        "right_blink_intent",
+        "smile"
+      ],
+      "training_windows": 123
+    },
+    {
+      "version": 2,
+      "trained_at": "2026-05-16T23:42:17.545156",
+      "model_path": "default_gesture_model_v2.pkl",
+      "dataset_path": "default_landmark_dataset_v2.json",
+      "classes": [
+        "both_eyes_closed_intent",
+        "brows_up",
+        "confirm",
+        "left_blink_intent",
+        "mouth_open_hold",
+        "neutral",
+        "right_blink_intent",
+        "smile"
+      ],
+      "training_windows": 147
+    },
+    {
+      "version": 3,
+      "trained_at": "2026-05-17T00:20:52.415174",
+      "model_path": "default_gesture_model_v3.pkl",
+      "dataset_path": "default_landmark_dataset_v3.json",
+      "classes": [
+        "both_eyes_closed_intent",
+        "brows_up",
+        "confirm",
+        "left_blink_intent",
+        "mouth_open_hold",
+        "neutral",
+        "right_blink_intent",
+        "smile"
+      ],
+      "training_windows": 147
+    }
+  ],
+  "training_summary": {
+    "profile": "default",
+    "version": 3,
+    "trained_at": "2026-05-17T00:20:52.415174",
+    "window_size": 12,
+    "feature_dim": 675,
+    "training_windows": 147,
+    "classes": [
+      "both_eyes_closed_intent",
+      "brows_up",
+      "confirm",
+      "left_blink_intent",
+      "mouth_open_hold",
+      "neutral",
+      "right_blink_intent",
+      "smile"
+    ],
+    "windows_per_class": {
+      "left_blink_intent": 17,
+      "right_blink_intent": 18,
+      "both_eyes_closed_intent": 18,
+      "mouth_open_hold": 18,
+      "smile": 18,
+      "brows_up": 17,
+      "confirm": 17,
+      "neutral": 24
+    },
+    "model_type": "RandomForestClassifier",
+    "n_estimators": 300,
+    "model_path": "D:\\IEEE-Movilidad-reducidad\\ProyectoGIA-main\\GIA\\data\\calibration\\default\\default_gesture_model_v3.pkl",
+    "dataset_path": "D:\\IEEE-Movilidad-reducidad\\ProyectoGIA-main\\GIA\\data\\calibration\\default\\default_landmark_dataset_v3.json"
+  },
+  "sample_counts": {
+    "left_blink_intent": 28,
+    "right_blink_intent": 29,
+    "both_eyes_closed_intent": 29,
+    "mouth_open_hold": 29,
+    "smile": 29,
+    "brows_up": 28,
+    "confirm": 28,
+    "neutral": 35
+  }
+}

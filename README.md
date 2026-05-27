@@ -44,13 +44,16 @@ Antes de entrar al runtime el usuario pasa por un launcher con:
 
 ### Control heurístico continuo
 
-El movimiento del cursor se calcula a partir de la posición de la nariz y una referencia neutral del usuario. El pipeline incluye:
+El movimiento del cursor usa un control por velocidad basado en desplazamiento facial normalizado respecto a una postura neutral. El pipeline incluye:
 
 - zona muerta
-- suavizado
+- curva no lineal por zonas
+- suavizado adaptativo
 - límite de velocidad
 - recentrado
 - verificación de estabilidad facial
+- clutch de cursor activado por gesto o voz
+- separación entre `vista espejo` y `dirección real del cursor`
 
 ### Gestos discretos con ML
 
@@ -69,7 +72,7 @@ Acciones actuales:
 - clic izquierdo
 - clic derecho
 - activar escucha de voz
-- abrir guía rápida
+- activar o congelar cursor
 - recentrar cursor
 - pausar o reanudar
 
@@ -84,6 +87,8 @@ Comandos de voz actuales:
 
 - pausar sistema
 - reanudar sistema
+- activar cursor
+- congelar cursor
 - centrar cursor
 - abrir guía
 - cerrar sistema
@@ -202,7 +207,7 @@ python main.py
 2. Crear o seleccionar un perfil
 3. Revisar la pestaña `Guia`
 4. Ejecutar `Diagnostico`
-5. Ajustar sensibilidad, zona muerta, suavizado y velocidad
+5. Ajustar sensibilidad, zona muerta, suavizado, velocidad, vista espejo e inversión de ejes
 6. Capturar postura neutral
 7. Capturar gestos faciales
 8. Entrenar modelo
@@ -219,9 +224,10 @@ Cada gesto se captura con un flujo guiado:
 1. cuenta regresiva de `3 s`
 2. inicio de captura
 3. mantener el gesto durante el tiempo sugerido
-4. almacenamiento de muestras faciales frame a frame
+4. barra de progreso visual
+5. almacenamiento de muestras faciales frame a frame
 
-No se guardan imágenes crudas como dataset principal. Lo que se usa son muestras faciales derivadas de landmarks.
+No se guardan imágenes crudas como dataset principal. Lo que se guarda es un dataset bruto serializado de muestras faciales derivadas de landmarks, versionado por perfil para permitir reentrenar sin repetir toda la captura.
 
 ### Qué se captura por frame
 
@@ -262,13 +268,18 @@ Modelo actual:
 
 ### Qué se guarda
 
-Modelo del perfil:
+Modelos versionados del perfil:
 
-- [data/calibration/<perfil>_gesture_model.pkl](D:\IEEE-Movilidad-reducidad\ProyectoGIA-main\GIA\data\calibration)
+- [data/calibration/<perfil>/<perfil>_gesture_model_vN.pkl](D:\IEEE-Movilidad-reducidad\ProyectoGIA-main\GIA\data\calibration)
 
-Resumen del entrenamiento:
+Datasets brutos versionados del perfil:
 
-- [data/calibration/<perfil>_samples.json](D:\IEEE-Movilidad-reducidad\ProyectoGIA-main\GIA\data\calibration)
+- [data/calibration/<perfil>/<perfil>_landmark_dataset_vN.json](D:\IEEE-Movilidad-reducidad\ProyectoGIA-main\GIA\data\calibration)
+
+Resumen y registro de versiones:
+
+- [data/calibration/<perfil>/model_registry.json](D:\IEEE-Movilidad-reducidad\ProyectoGIA-main\GIA\data\calibration)
+- [data/calibration/<perfil>/<perfil>_dataset_summary.json](D:\IEEE-Movilidad-reducidad\ProyectoGIA-main\GIA\data\calibration)
 
 Configuración global:
 
@@ -284,8 +295,8 @@ Modelo facial de MediaPipe:
 
 ### Formatos
 
-- `.pkl` para el modelo serializado con `joblib`
-- `.json` para el resumen de entrenamiento
+- `.pkl` para cada versión del modelo serializada con `joblib`
+- `.json` para dataset bruto, resumen y registro de versiones
 - `.jsonl` para logs de sesión
 - `.xlsx` para exporte secundario de métricas/eventos
 
@@ -297,6 +308,10 @@ Cada perfil guarda actualmente:
 - zona muerta
 - suavizado
 - velocidad máxima
+- inversión horizontal del cursor
+- inversión vertical del cursor
+- vista espejo de la cámara
+- cursor activo o congelado al iniciar
 - umbrales de confianza por gesto
 - duración mínima por gesto
 - cooldown por gesto
@@ -333,7 +348,6 @@ venv\Scripts\python.exe -m unittest tests.test_core
 
 - aún no existe validación extensa con usuarios reales
 - el modelo actual es por perfil y todavía no usa un modelo base global
-- el dataset bruto de landmarks no se persiste completamente para reentrenamiento avanzado
 - el control fino del cursor aún necesita afinado
 - pueden aparecer logs internos de MediaPipe/TFLite en consola
 - el sistema es Windows-first y no está preparado como multiplataforma

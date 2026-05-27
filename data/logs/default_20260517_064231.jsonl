@@ -1,0 +1,30 @@
+{"timestamp": "2026-05-17T06:42:32.432208", "event_type": "session", "detail": "Inicio de sesión", "state": "ready"}
+{"timestamp": "2026-05-17T06:42:33.459392", "event_type": "runtime", "detail": "Runtime iniciado", "profile": "default"}
+{"timestamp": "2026-05-17T06:42:58.400775", "event_type": "state", "detail": "Cambio de pausa", "state": "paused"}
+{"timestamp": "2026-05-17T06:42:59.911111", "event_type": "state", "detail": "Cambio de pausa", "state": "ready"}
+{"timestamp": "2026-05-17T06:43:01.431750", "event_type": "cursor", "detail": "Cambio de clutch", "cursor_active": true}
+{"timestamp": "2026-05-17T06:43:34.114065", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:43:40.883844", "event_type": "cursor", "detail": "Cambio de clutch", "cursor_active": false}
+{"timestamp": "2026-05-17T06:43:45.815316", "event_type": "cursor", "detail": "Cambio de clutch", "cursor_active": true}
+{"timestamp": "2026-05-17T06:43:54.867106", "event_type": "cursor", "detail": "Cambio de clutch", "cursor_active": false}
+{"timestamp": "2026-05-17T06:44:05.694968", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:44:13.558391", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:44:20.092046", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:44:22.775280", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:44:24.866312", "event_type": "heuristic", "detail": "Cursor recentrado"}
+{"timestamp": "2026-05-17T06:44:24.977389", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:44:26.853907", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:44:29.341034", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:44:33.095930", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:44:34.321688", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:44:39.420569", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:44:41.127408", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.503}
+{"timestamp": "2026-05-17T06:44:42.740510", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:44:45.221403", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:44:46.927539", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:45:31.801916", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:45:47.945270", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:45:49.152891", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:45:50.936974", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:45:52.344056", "event_type": "gesture", "detail": "Gesto aceptado", "gesture_id": "left_blink_intent", "confidence": 0.72}
+{"timestamp": "2026-05-17T06:45:59.822729", "event_type": "session", "detail": "Fin de sesión", "state": "stopped"}

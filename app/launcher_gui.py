@@ -57,6 +57,7 @@ class LauncherGUI:
         self._build_layout()
         self._populate_guide()
         self._apply_profile_to_controls()
+        self._load_existing_dataset()
         self.profile_menu.set(self.current_profile_name)
         self._refresh_sample_counts()
         self._sync_runtime_ready_state()
@@ -161,6 +162,7 @@ class LauncherGUI:
         tab = self.tabview.tab("Ajustes")
         tab.grid_columnconfigure(1, weight=1)
         self.setting_controls = {}
+        self.bool_controls = {}
         controls = [
             ("cursor_sensitivity", "Sensibilidad cursor", 0.4, 3.0),
             ("dead_zone_px", "Zona muerta (px)", 0, 30),
@@ -175,8 +177,20 @@ class LauncherGUI:
             value_label.grid(row=row, column=2, sticky="e", padx=12)
             slider.configure(command=lambda value, k=key, l=value_label: self._on_setting_change(k, value, l))
             self.setting_controls[key] = (slider, value_label)
+        bool_row = len(controls)
+        for index, (key, label) in enumerate(
+            [
+                ("mirror_preview", "Vista espejo"),
+                ("invert_x", "Invertir eje X del cursor"),
+                ("invert_y", "Invertir eje Y del cursor"),
+                ("cursor_starts_active", "Iniciar cursor activo"),
+            ]
+        ):
+            switch = ctk.CTkSwitch(tab, text=label, command=lambda k=key: self._on_bool_setting_change(k))
+            switch.grid(row=bool_row + index, column=0, columnspan=3, sticky="w", padx=12, pady=8)
+            self.bool_controls[key] = switch
         ctk.CTkButton(tab, text="Guardar ajustes del perfil", command=self._save_profile_settings).grid(
-            row=len(controls), column=0, columnspan=3, sticky="ew", padx=12, pady=12
+            row=bool_row + len(self.bool_controls), column=0, columnspan=3, sticky="ew", padx=12, pady=12
         )
 
     def _build_calibration_tab(self):
@@ -196,16 +210,27 @@ class LauncherGUI:
         )
         self.calibration_hint.grid(row=1, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 8))
 
+        self.capture_progress = ctk.CTkProgressBar(tab)
+        self.capture_progress.grid(row=2, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 4))
+        self.capture_progress.set(0.0)
+        self.capture_progress_label = ctk.CTkLabel(
+            tab,
+            text="Progreso de captura: 0%",
+            justify="left",
+            text_color="#475569",
+        )
+        self.capture_progress_label.grid(row=3, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 8))
+
         ctk.CTkButton(tab, text="Capturar neutral", command=lambda: self._begin_capture("neutral")).grid(
-            row=2, column=0, sticky="ew", padx=12, pady=6
+            row=4, column=0, sticky="ew", padx=12, pady=6
         )
         ctk.CTkButton(tab, text="Entrenar modelo", command=self._train_classifier).grid(
-            row=2, column=1, sticky="ew", padx=12, pady=6
+            row=4, column=1, sticky="ew", padx=12, pady=6
         )
         self.sample_count_box = ctk.CTkTextbox(tab, height=320)
-        self.sample_count_box.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=12, pady=(8, 12))
+        self.sample_count_box.grid(row=5, column=0, columnspan=2, sticky="nsew", padx=12, pady=(8, 12))
 
-        for index, gesture in enumerate(GESTURE_CATALOG, start=4):
+        for index, gesture in enumerate(GESTURE_CATALOG, start=6):
             ctk.CTkButton(
                 tab,
                 text=f"Capturar {gesture['title']}",
@@ -277,6 +302,8 @@ class LauncherGUI:
                     cv2.circle(preview_frame, point, 2, (0, 255, 0), -1)
                 cv2.circle(preview_frame, snapshot.face_sample.nose_px, 5, (255, 80, 0), -1)
             self._update_capture_state(snapshot.face_sample)
+            if self.profile.get("mirror_preview", True):
+                preview_frame = cv2.flip(preview_frame, 1)
             self._draw_capture_overlay(preview_frame)
             image = Image.fromarray(preview_frame)
             image.thumbnail((760, 620))
@@ -294,6 +321,9 @@ class LauncherGUI:
         if self.capture_phase == "countdown":
             remaining = max(0.0, self.capture_countdown_deadline - now)
             self.preview_status.configure(text=f"Preparate: {remaining:.1f} s")
+            progress = max(0.0, min(1.0, 1 - (remaining / self.CAPTURE_PREP_SECONDS)))
+            self.capture_progress.set(progress)
+            self.capture_progress_label.configure(text=f"Preparacion: {int(progress * 100)}%")
             if now >= self.capture_countdown_deadline:
                 self.capture_phase = "capturing"
                 gesture_name = self._gesture_title(self.capture_target)
@@ -308,6 +338,9 @@ class LauncherGUI:
         remaining = max(0.0, self.capture_deadline - now)
         gesture_name = self._gesture_title(self.capture_target)
         self.preview_status.configure(text=f"Capturando {gesture_name}: {remaining:.1f} s restantes")
+        progress = max(0.0, min(1.0, 1 - (remaining / max(self.capture_duration_seconds, 0.1))))
+        self.capture_progress.set(progress)
+        self.capture_progress_label.configure(text=f"Captura: {int(progress * 100)}%")
         if now >= self.capture_deadline:
             captured = len(self.calibration_samples[self.capture_target])
             self.preview_status.configure(text=f"Captura finalizada: {gesture_name}")
@@ -316,6 +349,8 @@ class LauncherGUI:
             )
             self.capture_target = None
             self.capture_phase = "idle"
+            self.capture_progress.set(1.0)
+            self.capture_progress_label.configure(text="Captura completada: 100%")
             self._refresh_sample_counts()
 
     def _begin_capture(self, gesture_id: str):
@@ -334,6 +369,8 @@ class LauncherGUI:
         self.capture_duration_seconds = capture_seconds
         self.capture_countdown_deadline = time.monotonic() + self.CAPTURE_PREP_SECONDS
         self.capture_deadline = self.capture_countdown_deadline + capture_seconds
+        self.capture_progress.set(0.0)
+        self.capture_progress_label.configure(text="Progreso de captura: 0%")
 
     def _train_classifier(self):
         try:
@@ -350,16 +387,12 @@ class LauncherGUI:
             self.profile["calibration"]["samples_per_gesture"] = {
                 name: len(values) for name, values in self.calibration_samples.items()
             }
-
-            self.classifier.save_samples(
-                {
-                    "profile": self.current_profile_name,
-                    "model_path": str(self.classifier.model_path),
-                    "samples_path": str(self.classifier.samples_path),
-                    "training_summary": self.classifier.training_summary,
-                    "sample_counts": self.profile["calibration"]["samples_per_gesture"],
-                }
-            )
+            self.profile["calibration"]["active_model_version"] = self.classifier.active_version
+            self.profile["calibration"]["active_model_path"] = str(self.classifier.model_path)
+            self.profile["calibration"]["active_dataset_path"] = str(self.classifier.active_dataset_path)
+            self.profile["calibration"]["model_versions"] = [
+                entry["version"] for entry in self.classifier.list_versions()
+            ]
 
             neutral = self.calibration_samples.get("neutral", [])
             if neutral:
@@ -406,8 +439,11 @@ class LauncherGUI:
             self.diagnostics_box.insert("end", f"Microfono / audio: error {exc}\n")
         model_status = "OK" if self.classifier.load() else "No entrenado todavia"
         self.diagnostics_box.insert("end", f"Modelo ML del perfil: {model_status}\n")
+        self.diagnostics_box.insert("end", f"Version activa: {self.classifier.active_version}\n")
+        self.diagnostics_box.insert("end", f"Versiones disponibles: {[entry['version'] for entry in self.classifier.list_versions()]}\n")
         self.diagnostics_box.insert("end", f"Ruta modelo: {self.classifier.model_path}\n")
         self.diagnostics_box.insert("end", f"Ruta resumen entrenamiento: {self.classifier.samples_path}\n")
+        self.diagnostics_box.insert("end", f"Ruta dataset activo: {self.classifier.active_dataset_path}\n")
         if self.classifier.training_summary:
             self.diagnostics_box.insert("end", f"Resumen entrenamiento: {self.classifier.training_summary}\n")
         self.diagnostics_box.insert("end", "TTS: opcional; el runtime continuara aunque falle.\n")
@@ -417,6 +453,7 @@ class LauncherGUI:
         self.profile = load_profile(profile_name)
         self.classifier = GestureClassifier(profile_name, window_size=int(self.settings.get("gesture_window_size", 12)))
         self._apply_profile_to_controls()
+        self._load_existing_dataset()
         self._refresh_profile_info()
         self._sync_runtime_ready_state()
 
@@ -440,6 +477,11 @@ class LauncherGUI:
             value = float(self.profile.get(key, self.settings.get(key, 0)))
             slider.set(value)
             label.configure(text=f"{value:.2f}")
+        for key, switch in self.bool_controls.items():
+            if bool(self.profile.get(key, False)):
+                switch.select()
+            else:
+                switch.deselect()
         self._refresh_profile_info()
 
     def _refresh_profile_info(self):
@@ -455,8 +497,15 @@ class LauncherGUI:
                 f"Zona muerta: {self.profile['dead_zone_px']}\n"
                 f"Suavizado: {self.profile['smoothing_factor']}\n"
                 f"Velocidad max.: {self.profile['max_cursor_speed_px']}\n"
+                f"Vista espejo: {self.profile['mirror_preview']}\n"
+                f"Invertir X: {self.profile['invert_x']}\n"
+                f"Invertir Y: {self.profile['invert_y']}\n"
+                f"Cursor inicia activo: {self.profile['cursor_starts_active']}\n"
+                f"Version activa: {self.profile['calibration']['active_model_version']}\n"
+                f"Versiones: {self.profile['calibration']['model_versions']}\n"
                 f"Modelo perfil: {self.classifier.model_path}\n"
                 f"Resumen entrenamiento: {self.classifier.samples_path}\n"
+                f"Dataset activo: {self.profile['calibration']['active_dataset_path']}\n"
             ),
         )
         self.profile_info.configure(state="disabled")
@@ -464,6 +513,10 @@ class LauncherGUI:
     def _on_setting_change(self, key, value, value_label):
         self.profile[key] = float(value)
         value_label.configure(text=f"{float(value):.2f}")
+
+    def _on_bool_setting_change(self, key):
+        switch = self.bool_controls[key]
+        self.profile[key] = bool(switch.get())
 
     def _save_profile_settings(self):
         save_profile(self.profile)
@@ -482,12 +535,35 @@ class LauncherGUI:
 
     def _sync_runtime_ready_state(self):
         model_ready = self.classifier.load()
+        if model_ready:
+            self.profile["calibration"]["active_model_version"] = self.classifier.active_version
+            self.profile["calibration"]["active_model_path"] = str(self.classifier.model_path)
+            self.profile["calibration"]["active_dataset_path"] = self.classifier.active_dataset_path
+            self.profile["calibration"]["model_versions"] = [
+                entry["version"] for entry in self.classifier.list_versions()
+            ]
+            if hasattr(self, "profile_info"):
+                self._refresh_profile_info()
         launcher_ready = bool(self.profile.get("launcher_completed")) and model_ready
         self.start_button.configure(state="normal" if launcher_ready else "disabled")
         if launcher_ready:
             self.launch_status.configure(text="Perfil calibrado. Puedes iniciar el sistema asistivo.")
         elif self.profile.get("launcher_completed") and not model_ready:
             self.launch_status.configure(text="Falta el modelo del perfil. Reentrena desde la calibracion.")
+
+    def _load_existing_dataset(self):
+        loaded = self.classifier.load_active_dataset()
+        if not loaded:
+            self.calibration_samples = {gesture["id"]: [] for gesture in GESTURE_CATALOG}
+            self.calibration_samples["neutral"] = []
+        else:
+            merged = {gesture["id"]: [] for gesture in GESTURE_CATALOG}
+            merged["neutral"] = []
+            for gesture_id, samples in loaded.items():
+                merged[gesture_id] = samples
+            self.calibration_samples = merged
+        if hasattr(self, "sample_count_box"):
+            self._refresh_sample_counts()
 
     def _gesture_meta(self, gesture_id: str) -> dict:
         if gesture_id == "neutral":
