@@ -4,37 +4,44 @@ import tkinter as tk
 import webbrowser
 
 import customtkinter as ctk
-from PIL import Image, ImageTk
+from PIL import Image, ImageOps, ImageTk
 
 from .gesture_catalog import GESTURE_CATALOG, VOICE_COMMAND_HELP
 
 
 class RuntimeGUI:
+    RIGHT_PANEL_WIDTH = 380
+    SIDE_WRAP = 300
+
     def __init__(self, root):
         self.root = root
         self.root.title("GIA v2 - Runtime Asistivo")
-        self.root.geometry("1280x840")
+        self.root.geometry("1440x900")
         self.root.minsize(1100, 720)
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
         self.controller = None
         self.image_ref = None
         self.compact_image_ref = None
         self.is_compact_mode = False
-        self.expanded_geometry = "1280x840"
+        self.expanded_geometry = "1440x900"
         self.compact_window = None
         self.compact_status_label = None
         self.compact_voice_label = None
         self.compact_event_log = None
         self.compact_video_label = None
+        self.show_camera_metrics_var = ctk.BooleanVar(value=False)
+        self.gesture_title_map = {gesture["id"]: gesture["title"] for gesture in GESTURE_CATALOG}
 
         self._build_layout()
 
     def set_controller(self, controller):
         self.controller = controller
+        if hasattr(self.controller, "set_camera_overlay_details"):
+            self.controller.set_camera_overlay_details(self.show_camera_metrics_var.get())
 
     def _build_layout(self):
-        self.root.grid_columnconfigure(0, weight=3)
-        self.root.grid_columnconfigure(1, weight=1)
+        self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_columnconfigure(1, weight=0, minsize=self.RIGHT_PANEL_WIDTH)
         self.root.grid_rowconfigure(1, weight=1)
 
         self.header = ctk.CTkFrame(self.root, corner_radius=0, fg_color="#183153")
@@ -78,12 +85,13 @@ class RuntimeGUI:
         self.video_label = tk.Label(self.left_frame, bg="#000000", bd=0, highlightthickness=0)
         self.video_label.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
 
-        self.right_frame = ctk.CTkFrame(self.root, fg_color="#f4f6f8")
+        self.right_frame = ctk.CTkFrame(self.root, fg_color="#f4f6f8", width=self.RIGHT_PANEL_WIDTH)
         self.right_frame.grid(row=1, column=1, sticky="nsew", padx=(10, 18), pady=18)
+        self.right_frame.grid_propagate(False)
         self.right_frame.grid_rowconfigure(3, weight=1)
         self.right_frame.grid_columnconfigure(0, weight=1)
 
-        self.metric_frame = ctk.CTkFrame(self.right_frame, fg_color="white")
+        self.metric_frame = ctk.CTkFrame(self.right_frame, fg_color="white", width=self.RIGHT_PANEL_WIDTH - 32)
         self.metric_frame.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
         self.metric_frame.grid_columnconfigure((0, 1), weight=1)
 
@@ -92,6 +100,8 @@ class RuntimeGUI:
             text="Gesto: -",
             font=ctk.CTkFont(size=18, weight="bold"),
             text_color="#183153",
+            justify="left",
+            wraplength=self.SIDE_WRAP,
         )
         self.gesture_label.grid(row=0, column=0, padx=14, pady=(14, 4), sticky="w")
 
@@ -141,7 +151,7 @@ class RuntimeGUI:
             font=ctk.CTkFont(size=13),
             text_color="#334e68",
             justify="left",
-            wraplength=320,
+            wraplength=self.SIDE_WRAP,
         )
         self.voice_text_label.grid(row=3, column=0, columnspan=2, padx=14, pady=(0, 6), sticky="w")
 
@@ -151,26 +161,55 @@ class RuntimeGUI:
             font=ctk.CTkFont(size=13),
             text_color="#334e68",
             justify="left",
-            wraplength=320,
+            wraplength=self.SIDE_WRAP,
         )
         self.voice_command_label.grid(row=4, column=0, columnspan=2, padx=14, pady=(0, 14), sticky="w")
+
+        self.rejection_label = ctk.CTkLabel(
+            self.metric_frame,
+            text="Motivo técnico: -",
+            font=ctk.CTkFont(size=13),
+            text_color="#7c2d12",
+            justify="left",
+            wraplength=self.SIDE_WRAP,
+        )
+        self.rejection_label.grid(row=5, column=0, columnspan=2, padx=14, pady=(0, 6), sticky="w")
+
+        self.model_label = ctk.CTkLabel(
+            self.metric_frame,
+            text="Modelo activo: -",
+            font=ctk.CTkFont(size=13),
+            text_color="#334e68",
+            justify="left",
+            wraplength=self.SIDE_WRAP,
+        )
+        self.model_label.grid(row=6, column=0, columnspan=2, padx=14, pady=(0, 14), sticky="w")
 
         self.actions_frame = ctk.CTkFrame(self.right_frame, fg_color="white")
         self.actions_frame.grid(row=1, column=0, sticky="ew", padx=16, pady=10)
         self.actions_frame.grid_columnconfigure((0, 1), weight=1)
 
-        ctk.CTkButton(self.actions_frame, text="Pausar / Reanudar", command=self._toggle_pause, height=48).grid(
-            row=0, column=0, padx=10, pady=10, sticky="ew"
+        self.pause_button = ctk.CTkButton(
+            self.actions_frame,
+            text="Pausar sistema",
+            command=self._toggle_pause,
+            height=48,
+            fg_color="#2563eb",
+            hover_color="#1d4ed8",
         )
+        self.pause_button.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         ctk.CTkButton(self.actions_frame, text="Recentrar", command=self._recenter, height=48).grid(
             row=0, column=1, padx=10, pady=10, sticky="ew"
         )
-        ctk.CTkButton(
+        self.cursor_button = ctk.CTkButton(
             self.actions_frame,
-            text="Activar / Congelar cursor",
+            text="Activar cursor",
             command=self._toggle_cursor,
             height=48,
-        ).grid(row=1, column=0, padx=10, pady=(0, 10), sticky="ew")
+            fg_color="#dc2626",
+            hover_color="#b91c1c",
+        )
+        self.cursor_button.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="ew")
         ctk.CTkButton(self.actions_frame, text="Modo compacto", command=self.enter_compact_mode, height=48).grid(
             row=1, column=1, padx=10, pady=(0, 10), sticky="ew"
         )
@@ -180,6 +219,13 @@ class RuntimeGUI:
         ctk.CTkButton(self.actions_frame, text="Cerrar sistema", command=self._quit, height=48, fg_color="#aa2e25").grid(
             row=2, column=1, padx=10, pady=(0, 10), sticky="ew"
         )
+        self.camera_metrics_checkbox = ctk.CTkCheckBox(
+            self.actions_frame,
+            text="Mostrar métricas y confianza en la cámara",
+            variable=self.show_camera_metrics_var,
+            command=self._toggle_camera_metrics,
+        )
+        self.camera_metrics_checkbox.grid(row=3, column=0, columnspan=2, padx=10, pady=(0, 12), sticky="w")
 
         self.event_log = ctk.CTkTextbox(self.right_frame, height=160, fg_color="#0d1b2a", text_color="#f1faee")
         self.event_log.grid(row=2, column=0, sticky="ew", padx=16, pady=10)
@@ -232,7 +278,13 @@ class RuntimeGUI:
         try:
             if not self.is_compact_mode:
                 image = Image.fromarray(frame_rgb)
-                image.thumbnail((860, 640))
+                max_width = self.video_label.winfo_width() - 12
+                max_height = self.video_label.winfo_height() - 12
+                if max_width <= 32:
+                    max_width = 1180
+                if max_height <= 32:
+                    max_height = 820
+                image = ImageOps.contain(image, (max_width, max_height), method=Image.Resampling.LANCZOS)
                 photo = ImageTk.PhotoImage(image=image)
                 self.video_label.configure(image=photo)
                 self.image_ref = photo
@@ -250,7 +302,8 @@ class RuntimeGUI:
         status_text = payload.get("status_text", "Sin estado")
         self.status_label.configure(text=status_text)
         self.state_badge.configure(text=f"Estado: {payload.get('state', '-')}")
-        self.gesture_label.configure(text=f"Gesto: {payload.get('gesture', '-')}")
+        gesture_id = payload.get("gesture", "-")
+        self.gesture_label.configure(text=f"Gesto: {self._format_gesture_label(gesture_id)}")
         self.confidence_label.configure(text=f"Confianza: {payload.get('confidence', '-')}")
         self.face_label.configure(text=f"Rostro: {payload.get('face', '-')}")
         self.mode_label.configure(text=f"Modo: {payload.get('mode', '-')}")
@@ -258,6 +311,14 @@ class RuntimeGUI:
         self.voice_state_label.configure(text=f"Voz: {payload.get('voice_state', 'en espera')}")
         self.voice_text_label.configure(text=f"Texto reconocido: {payload.get('voice_text', '-')}")
         self.voice_command_label.configure(text=f"Comando interpretado: {payload.get('voice_command', '-')}")
+        self.rejection_label.configure(text=f"Motivo técnico: {payload.get('rejection_reason', '-')}")
+        self.model_label.configure(
+            text=(
+                f"Modelo activo: v{payload.get('model_version', '-')}"
+                f" | Diagnóstico: {payload.get('diagnostic_hint', '-')}"
+            )
+        )
+        self._update_stateful_buttons(payload)
         if self.compact_status_label is not None:
             self.compact_status_label.configure(text=status_text)
         if self.compact_voice_label is not None:
@@ -268,6 +329,11 @@ class RuntimeGUI:
                     f"Comando: {payload.get('voice_command', '-')}"
                 )
             )
+
+    def _format_gesture_label(self, gesture_id):
+        if not gesture_id or gesture_id == "-":
+            return "-"
+        return self.gesture_title_map.get(gesture_id, str(gesture_id).replace("_", " "))
 
     def append_event(self, text: str):
         widgets = [self.event_log]
@@ -418,6 +484,40 @@ class RuntimeGUI:
     def _toggle_cursor(self):
         if self.controller:
             self.controller.toggle_cursor_control()
+
+    def _toggle_camera_metrics(self):
+        if self.controller and hasattr(self.controller, "set_camera_overlay_details"):
+            self.controller.set_camera_overlay_details(self.show_camera_metrics_var.get())
+
+    def _update_stateful_buttons(self, payload: dict):
+        mode = payload.get("mode", "-")
+        cursor = payload.get("cursor", "-")
+
+        if mode == "paused":
+            self.pause_button.configure(
+                text="Reanudar sistema",
+                fg_color="#dc2626",
+                hover_color="#b91c1c",
+            )
+        else:
+            self.pause_button.configure(
+                text="Pausar sistema",
+                fg_color="#2563eb",
+                hover_color="#1d4ed8",
+            )
+
+        if cursor == "activo":
+            self.cursor_button.configure(
+                text="Congelar cursor",
+                fg_color="#2563eb",
+                hover_color="#1d4ed8",
+            )
+        else:
+            self.cursor_button.configure(
+                text="Activar cursor",
+                fg_color="#dc2626",
+                hover_color="#b91c1c",
+            )
 
     def _quit(self):
         if self.controller:

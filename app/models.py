@@ -50,6 +50,37 @@ class GesturePrediction:
 
 
 @dataclass(slots=True)
+class GestureTrainingStatus:
+    gesture_id: str
+    title: str
+    action: str
+    captured_frames: int
+    valid_frames: int
+    invalid_frames: int
+    training_windows: int
+    recommended_min_frames: int
+    recommended_min_windows: int
+    readiness: str
+    help_message: str
+    success_message: str
+    blocker: str = ""
+
+
+@dataclass(slots=True)
+class GestureInferenceResult:
+    prediction: GesturePrediction | None
+    status_text: str
+    face_label: str
+    mode_label: str
+    cursor_label: str
+    runtime_state: str
+    rejection_reason: str = ""
+    executed: bool = False
+    should_log: bool = False
+    diagnostic_hint: str = ""
+
+
+@dataclass(slots=True)
 class SessionEvent:
     timestamp: str
     event_type: str

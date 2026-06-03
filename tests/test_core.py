@@ -1,9 +1,12 @@
 import unittest
+import uuid
+from pathlib import Path
 from shutil import rmtree
 
 import numpy as np
 
 from app.assistive_controls import AssistiveController
+from app.calibration_service import CalibrationService
 from app.config_store import build_default_profile, load_profile, load_settings, profile_calibration_dir, save_profile
 from app.gesture_ml import (
     GestureClassifier,
@@ -12,7 +15,8 @@ from app.gesture_ml import (
     serialize_face_sample,
 )
 from app.heuristic_engine import HeuristicEngine
-from app.models import FaceSample, GesturePrediction
+from app.inference_service import InferenceService
+from app.models import AppState, FaceSample, GesturePrediction
 from app.voice_router import resolve_command
 
 
@@ -55,13 +59,18 @@ class CoreTests(unittest.TestCase):
         self.assertIn("fps", settings)
         self.assertIn("gesture_window_size", settings)
 
-    def test_profile_confidence_is_capped_for_testing(self):
-        profile_name = "threshold_profile"
+    def test_profile_confidence_preserves_explicit_thresholds(self):
+        profile_name = f"threshold_profile_{uuid.uuid4().hex[:8]}"
         profile = build_default_profile(profile_name)
         profile["gesture_confidence"]["both_eyes_closed_intent"] = 0.82
         save_profile(profile)
-        loaded = load_profile(profile_name)
-        self.assertEqual(loaded["gesture_confidence"]["both_eyes_closed_intent"], 0.5)
+        try:
+            loaded = load_profile(profile_name)
+            self.assertEqual(loaded["gesture_confidence"]["both_eyes_closed_intent"], 0.82)
+        finally:
+            profile_path = Path("config") / "user_profiles" / f"{profile_name}.json"
+            if profile_path.exists():
+                profile_path.unlink()
 
     def test_voice_router(self):
         command, score = resolve_command("pausar sistema")
@@ -104,25 +113,73 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(np.allclose(restored.normalized_landmarks, sample.normalized_landmarks))
 
     def test_classifier_versioning_and_dataset_reload(self):
-        profile_name = "test_versioning_profile"
+        profile_name = f"test_versioning_profile_{uuid.uuid4().hex[:8]}"
         profile_dir = profile_calibration_dir(profile_name)
         if profile_dir.exists():
             rmtree(profile_dir)
-        classifier = GestureClassifier(profile_name, window_size=4)
+        try:
+            classifier = GestureClassifier(profile_name, window_size=4)
+            samples = {
+                "neutral": [make_sample(i) for i in range(8)],
+                "left_blink_intent": [make_shifted_sample(i, 0.4) for i in range(8)],
+            }
+            classifier.fit(samples, capture_quality_summary={"neutral": {"valid_frames": 8}})
+            self.assertEqual(classifier.active_version, 1)
+            self.assertTrue(classifier.model_path.exists())
+            loaded_samples = classifier.load_active_dataset()
+            self.assertIn("neutral", loaded_samples)
+            self.assertEqual(len(loaded_samples["neutral"]), 8)
+            self.assertIn("recommended_thresholds", classifier.training_summary)
+            self.assertIn("class_metrics", classifier.training_summary)
+
+            classifier.fit(samples)
+            self.assertEqual(classifier.active_version, 2)
+            self.assertEqual(len(classifier.list_versions()), 2)
+        finally:
+            if profile_dir.exists():
+                rmtree(profile_dir)
+
+    def test_calibration_service_tracks_readiness_and_pending_retraining(self):
+        service = CalibrationService(window_size=4)
         samples = {
             "neutral": [make_sample(i) for i in range(6)],
             "left_blink_intent": [make_shifted_sample(i, 0.4) for i in range(6)],
         }
-        classifier.fit(samples)
-        self.assertEqual(classifier.active_version, 1)
-        self.assertTrue(classifier.model_path.exists())
-        loaded_samples = classifier.load_active_dataset()
-        self.assertIn("neutral", loaded_samples)
-        self.assertEqual(len(loaded_samples["neutral"]), 6)
+        service.load_samples(samples)
+        ready, blockers, statuses = service.can_train()
+        self.assertFalse(ready)
+        self.assertIn("Postura neutral", blockers)
+        self.assertEqual(statuses["neutral"].readiness, "insuficiente")
 
-        classifier.fit(samples)
-        self.assertEqual(classifier.active_version, 2)
-        self.assertEqual(len(classifier.list_versions()), 2)
+        for gesture_id in service.gesture_order:
+            min_frames = service.gesture_meta[gesture_id]["recommended_min_frames"]
+            service.samples_by_gesture[gesture_id] = [make_shifted_sample(i, 0.3) for i in range(min_frames)]
+        ready, blockers, statuses = service.can_train()
+        self.assertTrue(ready)
+        self.assertEqual(blockers, [])
+        self.assertEqual(statuses["neutral"].readiness, "listo para entrenar")
+
+    def test_inference_service_reports_low_confidence_rejection(self):
+        profile = build_default_profile("inference_profile")
+        service = InferenceService(profile, window_size=4)
+        sample = make_sample(1)
+        state = type("State", (), {"face_stable": True, "status_text": "ok"})()
+        prediction = GesturePrediction("smile", 0.2, False)
+        result = service.evaluate(sample, state, prediction, AppState.READY, "activo")
+        self.assertEqual(result.rejection_reason, "confianza baja")
+        self.assertEqual(result.runtime_state, "rechazado")
+
+    def test_inference_service_accepts_after_duration(self):
+        profile = build_default_profile("inference_accept")
+        profile["gesture_duration_ms"]["smile"] = 0
+        service = InferenceService(profile, window_size=4)
+        sample = make_sample(1)
+        state = type("State", (), {"face_stable": True, "status_text": "ok"})()
+        prediction = GesturePrediction("smile", 0.91, False)
+        first = service.evaluate(sample, state, prediction, AppState.READY, "activo")
+        self.assertEqual(first.runtime_state, "validando gesto")
+        second = service.evaluate(sample, state, prediction, AppState.READY, "activo")
+        self.assertTrue(second.executed)
 
     def test_hybrid_eye_closed_validation(self):
         controller = AssistiveController.__new__(AssistiveController)

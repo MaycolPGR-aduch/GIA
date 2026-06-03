@@ -7,6 +7,7 @@ from datetime import datetime
 import joblib
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
 from .config_store import (
     active_dataset_summary_path,
@@ -99,6 +100,56 @@ class GestureClassifier:
         self.active_version: int | None = None
         self.active_dataset_path = None
 
+    def _split_windows_temporally(self, windows_by_gesture: dict[str, list[np.ndarray]]) -> tuple[list[np.ndarray], list[str], list[np.ndarray], list[str]]:
+        train_features = []
+        train_labels = []
+        validation_features = []
+        validation_labels = []
+        for gesture_id, windows in windows_by_gesture.items():
+            validation_count = 0
+            if len(windows) >= 6:
+                validation_count = max(1, int(round(len(windows) * 0.25)))
+            train_cutoff = len(windows) - validation_count
+            for vector in windows[:train_cutoff]:
+                train_features.append(vector)
+                train_labels.append(gesture_id)
+            for vector in windows[train_cutoff:]:
+                validation_features.append(vector)
+                validation_labels.append(gesture_id)
+        return train_features, train_labels, validation_features, validation_labels
+
+    def _recommended_thresholds(
+        self,
+        true_labels: list[str],
+        predicted_labels: np.ndarray,
+        probabilities: np.ndarray,
+        classes: np.ndarray,
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        thresholds = {}
+        rejection_rates = {}
+        for class_index, class_name in enumerate(classes):
+            confidences = [
+                float(probabilities[row_index][class_index])
+                for row_index, true_label in enumerate(true_labels)
+                if true_label == class_name and predicted_labels[row_index] == class_name
+            ]
+            if confidences:
+                threshold = float(np.clip(np.quantile(confidences, 0.25), 0.50, 0.92))
+            else:
+                threshold = 0.60
+            thresholds[str(class_name)] = round(threshold, 3)
+            total_rows = sum(1 for true_label in true_labels if true_label == class_name)
+            if total_rows == 0:
+                rejection_rates[str(class_name)] = 0.0
+            else:
+                rejected = sum(
+                    1
+                    for row_index, true_label in enumerate(true_labels)
+                    if true_label == class_name and float(np.max(probabilities[row_index])) < threshold
+                )
+                rejection_rates[str(class_name)] = round(rejected / total_rows, 3)
+        return thresholds, rejection_rates
+
     def _load_registry(self) -> dict:
         if not self.registry_path.exists():
             return {"profile": self.profile_name, "active_version": None, "versions": []}
@@ -172,40 +223,74 @@ class GestureClassifier:
                         return deserialize_samples_by_gesture(payload.get("samples_by_gesture", {}))
         return {}
 
-    def fit(self, samples_by_gesture: dict[str, list[FaceSample]]) -> None:
-        features = []
-        labels = []
+    def fit(self, samples_by_gesture: dict[str, list[FaceSample]], capture_quality_summary: dict | None = None) -> None:
+        windows_by_gesture: dict[str, list[np.ndarray]] = {}
         class_windows: dict[str, int] = {}
         for gesture_id, samples in samples_by_gesture.items():
             if len(samples) < self.window_size:
                 continue
+            windows_by_gesture[gesture_id] = []
             class_windows[gesture_id] = 0
             for index in range(self.window_size, len(samples) + 1):
                 window = samples[index - self.window_size : index]
-                features.append(self.extractor.extract(window))
-                labels.append(gesture_id)
+                windows_by_gesture[gesture_id].append(self.extractor.extract(window))
                 class_windows[gesture_id] += 1
 
-        if len(set(labels)) < 2:
+        labels = sorted(windows_by_gesture.keys())
+        if len(labels) < 2:
             raise ValueError("Se necesitan al menos dos clases con muestras suficientes para entrenar.")
+        if any(count < 3 for count in class_windows.values()):
+            raise ValueError("Cada gesto necesita al menos 3 ventanas útiles para entrenar de forma robusta.")
+
+        train_features, train_labels, validation_features, validation_labels = self._split_windows_temporally(windows_by_gesture)
+        if len(set(train_labels)) < 2:
+            raise ValueError("Se necesitan al menos dos clases en el conjunto de entrenamiento.")
 
         registry = self._load_registry()
         existing_versions = [entry["version"] for entry in registry.get("versions", [])]
         next_version = (max(existing_versions) + 1) if existing_versions else 1
 
-        feature_matrix = np.vstack(features)
+        feature_matrix = np.vstack(train_features)
         self.model = RandomForestClassifier(
             n_estimators=300,
             random_state=42,
             class_weight="balanced_subsample",
         )
-        self.model.fit(feature_matrix, np.array(labels))
-        self.labels = sorted(set(labels))
+        self.model.fit(feature_matrix, np.array(train_labels))
+        self.labels = sorted(set(train_labels))
         self.active_version = next_version
         self.model_path = versioned_model_path(self.profile_name, next_version)
         dataset_path = versioned_dataset_path(self.profile_name, next_version)
         self.active_dataset_path = str(dataset_path)
         self.samples_path = self.summary_path
+
+        validation_accuracy = None
+        validation_report = {}
+        confusion = []
+        recommended_thresholds = {label: 0.6 for label in self.labels}
+        rejection_rates = {label: 0.0 for label in self.labels}
+        if validation_features:
+            validation_matrix = np.vstack(validation_features)
+            predicted_labels = self.model.predict(validation_matrix)
+            probabilities = self.model.predict_proba(validation_matrix)
+            validation_accuracy = float(accuracy_score(validation_labels, predicted_labels))
+            validation_report = classification_report(
+                validation_labels,
+                predicted_labels,
+                output_dict=True,
+                zero_division=0,
+            )
+            confusion = confusion_matrix(
+                validation_labels,
+                predicted_labels,
+                labels=list(self.model.classes_),
+            ).tolist()
+            recommended_thresholds, rejection_rates = self._recommended_thresholds(
+                validation_labels,
+                predicted_labels,
+                probabilities,
+                self.model.classes_,
+            )
 
         self.training_summary = {
             "profile": self.profile_name,
@@ -213,13 +298,21 @@ class GestureClassifier:
             "trained_at": datetime.utcnow().isoformat(),
             "window_size": self.window_size,
             "feature_dim": int(feature_matrix.shape[1]),
-            "training_windows": int(feature_matrix.shape[0]),
+            "train_windows": int(feature_matrix.shape[0]),
+            "validation_windows": int(len(validation_features)),
+            "training_windows": int(feature_matrix.shape[0] + len(validation_features)),
             "classes": self.labels,
             "windows_per_class": class_windows,
             "model_type": "RandomForestClassifier",
             "n_estimators": 300,
             "model_path": str(self.model_path),
             "dataset_path": str(dataset_path),
+            "validation_accuracy": validation_accuracy,
+            "class_metrics": validation_report,
+            "confusion_matrix": confusion,
+            "recommended_thresholds": recommended_thresholds,
+            "low_confidence_rejection_rate": rejection_rates,
+            "capture_quality_summary": capture_quality_summary or {},
         }
         self.save()
 
@@ -238,7 +331,11 @@ class GestureClassifier:
             "model_path": self.model_path.name,
             "dataset_path": dataset_path.name,
             "classes": self.labels,
-            "training_windows": int(feature_matrix.shape[0]),
+            "training_windows": int(feature_matrix.shape[0] + len(validation_features)),
+            "train_windows": int(feature_matrix.shape[0]),
+            "validation_windows": int(len(validation_features)),
+            "validation_accuracy": validation_accuracy,
+            "recommended_thresholds": recommended_thresholds,
         }
         registry.setdefault("versions", []).append(registry_entry)
         registry["profile"] = self.profile_name
@@ -253,6 +350,7 @@ class GestureClassifier:
                 "versions": registry.get("versions", []),
                 "training_summary": self.training_summary,
                 "sample_counts": {name: len(values) for name, values in samples_by_gesture.items()},
+                "capture_quality_summary": capture_quality_summary or {},
             }
         )
 

@@ -20,6 +20,7 @@ FACE_LANDMARKER_MODEL_PATH = MODEL_DIR / "face_landmarker.task"
 
 DEFAULT_SETTINGS = {
     "camera_index": 0,
+    "camera_resolution": "1280x720",
     "fps": 15,
     "cursor_sensitivity": 1.35,
     "dead_zone_px": 8,
@@ -83,6 +84,10 @@ DEFAULT_PROFILE = {
         "completed": False,
         "last_calibrated_at": None,
         "samples_per_gesture": {},
+        "gesture_readiness": {},
+        "capture_quality": {},
+        "pending_retraining": False,
+        "last_training_metrics": {},
         "active_model_version": None,
         "active_model_path": None,
         "active_dataset_path": None,
@@ -122,6 +127,18 @@ def save_settings(settings: dict) -> None:
     _write_json(SETTINGS_PATH, settings)
 
 
+def parse_camera_resolution(value: str | None) -> tuple[int, int]:
+    if not value:
+        return 1280, 720
+    try:
+        width_text, height_text = str(value).lower().split("x", maxsplit=1)
+        width = max(1, int(width_text.strip()))
+        height = max(1, int(height_text.strip()))
+        return width, height
+    except Exception:
+        return 1280, 720
+
+
 def list_profiles() -> list[str]:
     ensure_app_dirs()
     profiles = sorted(path.stem for path in PROFILE_DIR.glob("*.json"))
@@ -139,7 +156,7 @@ def load_profile(profile_name: str) -> dict:
     profile.update(_read_json(profile_path))
     profile["calibration"] = {**deepcopy(DEFAULT_PROFILE["calibration"]), **profile.get("calibration", {})}
     profile["gesture_confidence"] = {
-        key: min(0.50, float(value))
+        key: float(value)
         for key, value in {**deepcopy(DEFAULT_PROFILE["gesture_confidence"]), **profile.get("gesture_confidence", {})}.items()
     }
     if not profile.get("created_at"):

@@ -5,6 +5,11 @@ GESTURE_CATALOG = [
         "action": "Clic izquierdo",
         "duration_ms": 350,
         "warning": "Debe mantenerse levemente mas que un parpadeo natural.",
+        "training_hint": "Mantén el ojo izquierdo cerrado de forma deliberada mientras el derecho sigue abierto.",
+        "common_failure_hint": "No gires la cabeza ni cierres ambos ojos al mismo tiempo.",
+        "success_hint": "Se verá listo cuando acumule suficientes ventanas útiles para ML.",
+        "recommended_min_frames": 28,
+        "recommended_min_windows": 12,
     },
     {
         "id": "right_blink_intent",
@@ -12,6 +17,11 @@ GESTURE_CATALOG = [
         "action": "Clic derecho",
         "duration_ms": 350,
         "warning": "No se ejecuta si la confianza es baja o el sistema no esta estable.",
+        "training_hint": "Mantén el ojo derecho cerrado de forma deliberada mientras el izquierdo sigue abierto.",
+        "common_failure_hint": "Evita sonreír o mover la cabeza durante la captura.",
+        "success_hint": "Necesita ventanas claras para diferenciarse del parpadeo natural.",
+        "recommended_min_frames": 28,
+        "recommended_min_windows": 12,
     },
     {
         "id": "both_eyes_closed_intent",
@@ -19,6 +29,11 @@ GESTURE_CATALOG = [
         "action": "Escuchar comando de voz",
         "duration_ms": 900,
         "warning": "Manten ambos ojos cerrados de forma deliberada.",
+        "training_hint": "Cierra ambos ojos con intención y mantenlos sin apretar el resto del rostro.",
+        "common_failure_hint": "Si se mezcla con guiños asimétricos el modelo se vuelve confuso.",
+        "success_hint": "Debe sentirse como un gesto sostenido, no como un parpadeo largo.",
+        "recommended_min_frames": 32,
+        "recommended_min_windows": 14,
     },
     {
         "id": "mouth_open_hold",
@@ -26,6 +41,11 @@ GESTURE_CATALOG = [
         "action": "Activar o congelar cursor",
         "duration_ms": 700,
         "warning": "Se usa como clutch del cursor. Debe formar una O clara y deliberada.",
+        "training_hint": "Forma una O clara con la boca y mantenla estable hasta que termine la captura.",
+        "common_failure_hint": "Evita hablar durante esta captura; eso mete ruido en el gesto.",
+        "success_hint": "Mientras más estable sea la apertura, mejor separará este gesto de sonrisa y neutral.",
+        "recommended_min_frames": 30,
+        "recommended_min_windows": 13,
     },
     {
         "id": "smile",
@@ -33,6 +53,11 @@ GESTURE_CATALOG = [
         "action": "Recentrar cursor",
         "duration_ms": 600,
         "warning": "Usala cuando el control se desvie.",
+        "training_hint": "Haz una sonrisa clara pero estable, sin inclinar la cabeza.",
+        "common_failure_hint": "Una media sonrisa suele confundirse con neutral o confirmación.",
+        "success_hint": "La captura es buena cuando la sonrisa se mantiene sin cambios bruscos.",
+        "recommended_min_frames": 30,
+        "recommended_min_windows": 13,
     },
     {
         "id": "brows_up",
@@ -40,6 +65,11 @@ GESTURE_CATALOG = [
         "action": "Pausar o reanudar",
         "duration_ms": 700,
         "warning": "Es el gesto de seguridad principal.",
+        "training_hint": "Eleva ambas cejas manteniendo ojos y boca lo más neutros posible.",
+        "common_failure_hint": "No combines este gesto con sorpresa grande o apertura de boca.",
+        "success_hint": "Debe sentirse como un gesto de seguridad, claro y simétrico.",
+        "recommended_min_frames": 30,
+        "recommended_min_windows": 13,
     },
     {
         "id": "confirm",
@@ -47,8 +77,27 @@ GESTURE_CATALOG = [
         "action": "Confirmar seleccion actual",
         "duration_ms": 650,
         "warning": "Reservado para flujos guiados y extensiones futuras.",
+        "training_hint": "Usa siempre la misma expresión de confirmación para que el perfil sea consistente.",
+        "common_failure_hint": "Si cambia mucho entre capturas, el modelo no aprenderá una firma clara.",
+        "success_hint": "Aunque hoy se use poco, conviene entrenarlo con buena consistencia.",
+        "recommended_min_frames": 30,
+        "recommended_min_windows": 13,
     },
 ]
+
+
+NEUTRAL_GESTURE_META = {
+    "id": "neutral",
+    "title": "Postura neutral",
+    "action": "Referencia base",
+    "duration_ms": 0,
+    "warning": "Manten una postura relajada mirando al frente.",
+    "training_hint": "Mira al frente y mantén una expresión relajada y estable.",
+    "common_failure_hint": "Si te mueves mucho, el neutral deja de ser una referencia confiable.",
+    "success_hint": "La captura es buena cuando nariz, ojos y boca permanecen estables.",
+    "recommended_min_frames": 36,
+    "recommended_min_windows": 18,
+}
 
 
 VOICE_COMMAND_HELP = [

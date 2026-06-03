@@ -1,7 +1,7 @@
 {
   "name": "default",
   "created_at": "2026-05-16T04:30:30.587251",
-  "updated_at": "2026-05-17T06:42:31.185378",
+  "updated_at": "2026-06-03T20:04:45.344568",
   "launcher_completed": true,
   "neutral_nose": [
     431.62857142857143,
@@ -63,9 +63,150 @@
       "confirm": 28,
       "neutral": 35
     },
+    "gesture_readiness": {
+      "neutral": "insuficiente",
+      "left_blink_intent": "listo para entrenar",
+      "right_blink_intent": "listo para entrenar",
+      "both_eyes_closed_intent": "insuficiente",
+      "mouth_open_hold": "insuficiente",
+      "smile": "insuficiente",
+      "brows_up": "insuficiente",
+      "confirm": "insuficiente"
+    },
+    "capture_quality": {
+      "neutral": {
+        "captured_frames": 35,
+        "valid_frames": 35,
+        "invalid_frames": 0,
+        "training_windows": 24,
+        "trained": false,
+        "readiness": "insuficiente",
+        "help_message": "Mira al frente y mantén una expresión relajada y estable.",
+        "success_message": "La captura es buena cuando nariz, ojos y boca permanecen estables.",
+        "blocker": "Faltan frames o ventanas útiles. Objetivo: 36 frames y 18 ventanas.",
+        "last_feedback": "Mira al frente y mantén una expresión relajada y estable."
+      },
+      "left_blink_intent": {
+        "captured_frames": 28,
+        "valid_frames": 28,
+        "invalid_frames": 0,
+        "training_windows": 17,
+        "trained": false,
+        "readiness": "listo para entrenar",
+        "help_message": "Mantén el ojo izquierdo cerrado de forma deliberada mientras el derecho sigue abierto.",
+        "success_message": "Se verá listo cuando acumule suficientes ventanas útiles para ML.",
+        "blocker": "",
+        "last_feedback": "Mantén el ojo izquierdo cerrado de forma deliberada mientras el derecho sigue abierto."
+      },
+      "right_blink_intent": {
+        "captured_frames": 29,
+        "valid_frames": 29,
+        "invalid_frames": 0,
+        "training_windows": 18,
+        "trained": false,
+        "readiness": "listo para entrenar",
+        "help_message": "Mantén el ojo derecho cerrado de forma deliberada mientras el izquierdo sigue abierto.",
+        "success_message": "Necesita ventanas claras para diferenciarse del parpadeo natural.",
+        "blocker": "",
+        "last_feedback": "Mantén el ojo derecho cerrado de forma deliberada mientras el izquierdo sigue abierto."
+      },
+      "both_eyes_closed_intent": {
+        "captured_frames": 29,
+        "valid_frames": 29,
+        "invalid_frames": 0,
+        "training_windows": 18,
+        "trained": false,
+        "readiness": "insuficiente",
+        "help_message": "Cierra ambos ojos con intención y mantenlos sin apretar el resto del rostro.",
+        "success_message": "Debe sentirse como un gesto sostenido, no como un parpadeo largo.",
+        "blocker": "Faltan frames o ventanas útiles. Objetivo: 32 frames y 14 ventanas.",
+        "last_feedback": "Cierra ambos ojos con intención y mantenlos sin apretar el resto del rostro."
+      },
+      "mouth_open_hold": {
+        "captured_frames": 29,
+        "valid_frames": 29,
+        "invalid_frames": 0,
+        "training_windows": 18,
+        "trained": false,
+        "readiness": "insuficiente",
+        "help_message": "Forma una O clara con la boca y mantenla estable hasta que termine la captura.",
+        "success_message": "Mientras más estable sea la apertura, mejor separará este gesto de sonrisa y neutral.",
+        "blocker": "Faltan frames o ventanas útiles. Objetivo: 30 frames y 13 ventanas.",
+        "last_feedback": "Forma una O clara con la boca y mantenla estable hasta que termine la captura."
+      },
+      "smile": {
+        "captured_frames": 29,
+        "valid_frames": 29,
+        "invalid_frames": 0,
+        "training_windows": 18,
+        "trained": false,
+        "readiness": "insuficiente",
+        "help_message": "Haz una sonrisa clara pero estable, sin inclinar la cabeza.",
+        "success_message": "La captura es buena cuando la sonrisa se mantiene sin cambios bruscos.",
+        "blocker": "Faltan frames o ventanas útiles. Objetivo: 30 frames y 13 ventanas.",
+        "last_feedback": "Haz una sonrisa clara pero estable, sin inclinar la cabeza."
+      },
+      "brows_up": {
+        "captured_frames": 28,
+        "valid_frames": 28,
+        "invalid_frames": 0,
+        "training_windows": 17,
+        "trained": false,
+        "readiness": "insuficiente",
+        "help_message": "Eleva ambas cejas manteniendo ojos y boca lo más neutros posible.",
+        "success_message": "Debe sentirse como un gesto de seguridad, claro y simétrico.",
+        "blocker": "Faltan frames o ventanas útiles. Objetivo: 30 frames y 13 ventanas.",
+        "last_feedback": "Eleva ambas cejas manteniendo ojos y boca lo más neutros posible."
+      },
+      "confirm": {
+        "captured_frames": 28,
+        "valid_frames": 28,
+        "invalid_frames": 0,
+        "training_windows": 17,
+        "trained": false,
+        "readiness": "insuficiente",
+        "help_message": "Usa siempre la misma expresión de confirmación para que el perfil sea consistente.",
+        "success_message": "Aunque hoy se use poco, conviene entrenarlo con buena consistencia.",
+        "blocker": "Faltan frames o ventanas útiles. Objetivo: 30 frames y 13 ventanas.",
+        "last_feedback": "Usa siempre la misma expresión de confirmación para que el perfil sea consistente."
+      }
+    },
+    "pending_retraining": false,
+    "last_training_metrics": {
+      "profile": "default",
+      "version": 3,
+      "trained_at": "2026-05-17T00:20:52.415174",
+      "window_size": 12,
+      "feature_dim": 675,
+      "training_windows": 147,
+      "classes": [
+        "both_eyes_closed_intent",
+        "brows_up",
+        "confirm",
+        "left_blink_intent",
+        "mouth_open_hold",
+        "neutral",
+        "right_blink_intent",
+        "smile"
+      ],
+      "windows_per_class": {
+        "left_blink_intent": 17,
+        "right_blink_intent": 18,
+        "both_eyes_closed_intent": 18,
+        "mouth_open_hold": 18,
+        "smile": 18,
+        "brows_up": 17,
+        "confirm": 17,
+        "neutral": 24
+      },
+      "model_type": "RandomForestClassifier",
+      "n_estimators": 300,
+      "model_path": "D:\\IEEE-Movilidad-reducidad\\ProyectoGIA-main\\GIA\\data\\calibration\\default\\default_gesture_model_v3.pkl",
+      "dataset_path": "D:\\IEEE-Movilidad-reducidad\\ProyectoGIA-main\\GIA\\data\\calibration\\default\\default_landmark_dataset_v3.json"
+    },
     "active_model_version": 3,
-    "active_model_path": "D:\\IEEE-Movilidad-reducidad\\ProyectoGIA-main\\GIA\\data\\calibration\\default\\default_gesture_model_v3.pkl",
-    "active_dataset_path": "D:\\IEEE-Movilidad-reducidad\\ProyectoGIA-main\\GIA\\data\\calibration\\default\\default_landmark_dataset_v3.json",
+    "active_model_path": "C:\\GIA 2\\GIA\\data\\calibration\\default\\default_gesture_model_v3.pkl",
+    "active_dataset_path": "C:\\GIA 2\\GIA\\data\\calibration\\default\\default_landmark_dataset_v3.json",
     "model_versions": [
       1,
       2,
