@@ -1,7 +1,7 @@
 {
   "profile": "default",
-  "active_version": 3,
-  "registry_path": "D:\\IEEE-Movilidad-reducidad\\ProyectoGIA-main\\GIA\\data\\calibration\\default\\model_registry.json",
+  "active_version": 4,
+  "registry_path": "C:\\GIA 2\\GIA\\data\\calibration\\default\\model_registry.json",
   "versions": [
     {
       "version": 1,
@@ -52,15 +52,47 @@
         "smile"
       ],
       "training_windows": 147
+    },
+    {
+      "version": 4,
+      "trained_at": "2026-06-04T20:24:08.344808",
+      "model_path": "default_gesture_model_v4.pkl",
+      "dataset_path": "default_landmark_dataset_v4.json",
+      "classes": [
+        "both_eyes_closed_intent",
+        "brows_up",
+        "confirm",
+        "left_blink_intent",
+        "mouth_open_hold",
+        "neutral",
+        "right_blink_intent",
+        "smile"
+      ],
+      "training_windows": 232,
+      "train_windows": 176,
+      "validation_windows": 56,
+      "validation_accuracy": 0.2857142857142857,
+      "recommended_thresholds": {
+        "both_eyes_closed_intent": 0.6,
+        "brows_up": 0.5,
+        "confirm": 0.5,
+        "left_blink_intent": 0.6,
+        "mouth_open_hold": 0.5,
+        "neutral": 0.879,
+        "right_blink_intent": 0.5,
+        "smile": 0.5
+      }
     }
   ],
   "training_summary": {
     "profile": "default",
-    "version": 3,
-    "trained_at": "2026-05-17T00:20:52.415174",
+    "version": 4,
+    "trained_at": "2026-06-04T20:24:08.344808",
     "window_size": 12,
-    "feature_dim": 675,
-    "training_windows": 147,
+    "feature_dim": 32,
+    "train_windows": 176,
+    "validation_windows": 56,
+    "training_windows": 232,
     "classes": [
       "both_eyes_closed_intent",
       "brows_up",
@@ -72,28 +104,195 @@
       "smile"
     ],
     "windows_per_class": {
-      "left_blink_intent": 17,
-      "right_blink_intent": 18,
-      "both_eyes_closed_intent": 18,
-      "mouth_open_hold": 18,
-      "smile": 18,
-      "brows_up": 17,
-      "confirm": 17,
-      "neutral": 24
+      "neutral": 29,
+      "left_blink_intent": 29,
+      "right_blink_intent": 29,
+      "both_eyes_closed_intent": 29,
+      "mouth_open_hold": 29,
+      "smile": 29,
+      "brows_up": 29,
+      "confirm": 29
     },
-    "model_type": "RandomForestClassifier",
-    "n_estimators": 300,
-    "model_path": "D:\\IEEE-Movilidad-reducidad\\ProyectoGIA-main\\GIA\\data\\calibration\\default\\default_gesture_model_v3.pkl",
-    "dataset_path": "D:\\IEEE-Movilidad-reducidad\\ProyectoGIA-main\\GIA\\data\\calibration\\default\\default_landmark_dataset_v3.json"
+    "model_type": "LogisticRegression",
+    "model_path": "C:\\GIA 2\\GIA\\data\\calibration\\default\\default_gesture_model_v4.pkl",
+    "dataset_path": "C:\\GIA 2\\GIA\\data\\calibration\\default\\default_landmark_dataset_v4.json",
+    "validation_accuracy": 0.2857142857142857,
+    "class_metrics": {
+      "both_eyes_closed_intent": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1-score": 0.0,
+        "support": 7.0
+      },
+      "brows_up": {
+        "precision": 0.1111111111111111,
+        "recall": 0.14285714285714285,
+        "f1-score": 0.125,
+        "support": 7.0
+      },
+      "confirm": {
+        "precision": 0.18181818181818182,
+        "recall": 0.2857142857142857,
+        "f1-score": 0.2222222222222222,
+        "support": 7.0
+      },
+      "left_blink_intent": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1-score": 0.0,
+        "support": 7.0
+      },
+      "mouth_open_hold": {
+        "precision": 0.5,
+        "recall": 0.2857142857142857,
+        "f1-score": 0.36363636363636365,
+        "support": 7.0
+      },
+      "neutral": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 7.0
+      },
+      "right_blink_intent": {
+        "precision": 0.2222222222222222,
+        "recall": 0.2857142857142857,
+        "f1-score": 0.25,
+        "support": 7.0
+      },
+      "smile": {
+        "precision": 0.5,
+        "recall": 0.2857142857142857,
+        "f1-score": 0.36363636363636365,
+        "support": 7.0
+      },
+      "accuracy": 0.2857142857142857,
+      "macro avg": {
+        "precision": 0.3143939393939394,
+        "recall": 0.2857142857142857,
+        "f1-score": 0.29056186868686873,
+        "support": 56.0
+      },
+      "weighted avg": {
+        "precision": 0.3143939393939394,
+        "recall": 0.2857142857142857,
+        "f1-score": 0.2905618686868686,
+        "support": 56.0
+      }
+    },
+    "confusion_matrix": [
+      [
+        0,
+        1,
+        3,
+        1,
+        0,
+        0,
+        1,
+        1
+      ],
+      [
+        0,
+        1,
+        3,
+        0,
+        1,
+        0,
+        1,
+        1
+      ],
+      [
+        2,
+        1,
+        2,
+        0,
+        0,
+        0,
+        2,
+        0
+      ],
+      [
+        3,
+        3,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        1,
+        2,
+        1,
+        2,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        7,
+        0,
+        0
+      ],
+      [
+        0,
+        2,
+        0,
+        3,
+        0,
+        0,
+        2,
+        0
+      ],
+      [
+        2,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        2
+      ]
+    ],
+    "recommended_thresholds": {
+      "both_eyes_closed_intent": 0.6,
+      "brows_up": 0.5,
+      "confirm": 0.5,
+      "left_blink_intent": 0.6,
+      "mouth_open_hold": 0.5,
+      "neutral": 0.879,
+      "right_blink_intent": 0.5,
+      "smile": 0.5
+    },
+    "low_confidence_rejection_rate": {
+      "both_eyes_closed_intent": 1.0,
+      "brows_up": 1.0,
+      "confirm": 1.0,
+      "left_blink_intent": 1.0,
+      "mouth_open_hold": 1.0,
+      "neutral": 0.286,
+      "right_blink_intent": 1.0,
+      "smile": 1.0
+    },
+    "capture_quality_summary": {}
   },
   "sample_counts": {
-    "left_blink_intent": 28,
-    "right_blink_intent": 29,
-    "both_eyes_closed_intent": 29,
-    "mouth_open_hold": 29,
-    "smile": 29,
-    "brows_up": 28,
-    "confirm": 28,
-    "neutral": 35
-  }
+    "neutral": 40,
+    "left_blink_intent": 40,
+    "right_blink_intent": 40,
+    "both_eyes_closed_intent": 40,
+    "mouth_open_hold": 40,
+    "smile": 40,
+    "brows_up": 40,
+    "confirm": 40
+  },
+  "capture_quality_summary": {}
 }

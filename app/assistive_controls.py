@@ -46,6 +46,8 @@ class AssistiveController:
         self.window_size = int(settings.get("gesture_window_size", 12))
         self.classifier = GestureClassifier(profile["name"], window_size=self.window_size)
         self.classifier.load()
+        if self.classifier.window_size != self.window_size:
+            self.window_size = self.classifier.window_size
         self.inference = InferenceService(profile, self.window_size)
 
         pyautogui.FAILSAFE = False
@@ -89,10 +91,16 @@ class AssistiveController:
     def _ui_available(self) -> bool:
         if self.main_gui_interface is None:
             return False
+        if hasattr(self.main_gui_interface, "root"):
+            try:
+                return bool(self.main_gui_interface.root.winfo_exists())
+            except Exception:
+                return False
         try:
-            return bool(self.main_gui_interface.root.winfo_exists())
+            return self.main_gui_interface.isVisible()
         except Exception:
             return False
+
 
     def _configure_audio(self):
         try:
@@ -142,7 +150,10 @@ class AssistiveController:
 
     def hablar(self, text: str):
         if self.main_gui_interface:
-            self.main_gui_interface.append_event(text)
+            if hasattr(self.main_gui_interface, "signals"):
+                self.main_gui_interface.signals.event_update.emit(text)
+            else:
+                self.main_gui_interface.append_event(text)
         if not self.tts:
             return
         try:
@@ -150,6 +161,7 @@ class AssistiveController:
             self.tts.runAndWait()
         except Exception as exc:
             print(f"Error reproduciendo TTS: {exc}")
+
 
     def toggle_cursor_control(self):
         self.cursor_active = not self.cursor_active
@@ -550,10 +562,13 @@ class AssistiveController:
         if not self._ui_available():
             return
         try:
-            self.main_gui_interface.root.after(
-                0,
-                lambda: self.main_gui_interface.update_video_feed(frame_rgb, compact_frame_rgb),
-            )
+            if hasattr(self.main_gui_interface, "signals"):
+                self.main_gui_interface.signals.video_update.emit(frame_rgb, compact_frame_rgb)
+            elif hasattr(self.main_gui_interface, "root"):
+                self.main_gui_interface.root.after(
+                    0,
+                    lambda: self.main_gui_interface.update_video_feed(frame_rgb, compact_frame_rgb),
+                )
         except Exception:
             pass
 
@@ -590,9 +605,13 @@ class AssistiveController:
         if not self._ui_available():
             return
         try:
-            self.main_gui_interface.root.after(0, lambda: self.main_gui_interface.update_status(payload))
+            if hasattr(self.main_gui_interface, "signals"):
+                self.main_gui_interface.signals.status_update.emit(payload)
+            elif hasattr(self.main_gui_interface, "root"):
+                self.main_gui_interface.root.after(0, lambda: self.main_gui_interface.update_status(payload))
         except Exception:
             pass
+
 
     def _apply_camera_resolution(self, cap):
         width, height = parse_camera_resolution(self.settings.get("camera_resolution"))

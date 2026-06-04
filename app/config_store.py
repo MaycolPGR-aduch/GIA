@@ -53,14 +53,14 @@ DEFAULT_PROFILE = {
     "voice_enabled": True,
     "tts_enabled": False,
     "gesture_confidence": {
-        "neutral": 0.50,
-        "left_blink_intent": 0.50,
-        "right_blink_intent": 0.50,
-        "both_eyes_closed_intent": 0.50,
-        "mouth_open_hold": 0.50,
-        "smile": 0.50,
-        "brows_up": 0.50,
-        "confirm": 0.50,
+        "neutral": 0.30,
+        "left_blink_intent": 0.30,
+        "right_blink_intent": 0.30,
+        "both_eyes_closed_intent": 0.30,
+        "mouth_open_hold": 0.30,
+        "smile": 0.30,
+        "brows_up": 0.30,
+        "confirm": 0.30,
     },
     "gesture_duration_ms": {
         "left_blink_intent": 350,
@@ -184,6 +184,26 @@ def build_default_profile(profile_name: str) -> dict:
     profile["created_at"] = datetime.utcnow().isoformat()
     profile["updated_at"] = profile["created_at"]
     return profile
+
+
+def delete_profile(profile_name: str) -> None:
+    ensure_app_dirs()
+    profile_path = PROFILE_DIR / f"{profile_name}.json"
+    if profile_path.exists():
+        profile_path.unlink()
+        
+    # Limpiar también la carpeta de calibración
+    calib_dir = CALIBRATION_DIR / profile_name
+    if calib_dir.exists():
+        for file_path in calib_dir.glob("*"):
+            try:
+                file_path.unlink()
+            except Exception:
+                pass
+        try:
+            calib_dir.rmdir()
+        except Exception:
+            pass
 
 
 def profile_calibration_dir(profile_name: str) -> Path:

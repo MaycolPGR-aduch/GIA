@@ -1,6 +1,6 @@
 {
   "profile": "default",
-  "active_version": 3,
+  "active_version": 4,
   "versions": [
     {
       "version": 1,
@@ -51,6 +51,36 @@
         "smile"
       ],
       "training_windows": 147
+    },
+    {
+      "version": 4,
+      "trained_at": "2026-06-04T20:24:08.344808",
+      "model_path": "default_gesture_model_v4.pkl",
+      "dataset_path": "default_landmark_dataset_v4.json",
+      "classes": [
+        "both_eyes_closed_intent",
+        "brows_up",
+        "confirm",
+        "left_blink_intent",
+        "mouth_open_hold",
+        "neutral",
+        "right_blink_intent",
+        "smile"
+      ],
+      "training_windows": 232,
+      "train_windows": 176,
+      "validation_windows": 56,
+      "validation_accuracy": 0.2857142857142857,
+      "recommended_thresholds": {
+        "both_eyes_closed_intent": 0.6,
+        "brows_up": 0.5,
+        "confirm": 0.5,
+        "left_blink_intent": 0.6,
+        "mouth_open_hold": 0.5,
+        "neutral": 0.879,
+        "right_blink_intent": 0.5,
+        "smile": 0.5
+      }
     }
   ]
 }

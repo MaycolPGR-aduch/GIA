@@ -20,6 +20,43 @@ class TrainingService:
     def list_versions(self) -> list[dict]:
         return self.classifier.list_versions()
 
+    def save_pending_samples(self, samples_by_gesture: dict, capture_quality: dict) -> None:
+        from .config_store import profile_calibration_dir
+        from .gesture_ml import serialize_samples_by_gesture
+        import json
+
+        path = profile_calibration_dir(self.profile_name) / "pending_samples.json"
+        payload = {
+            "samples_by_gesture": serialize_samples_by_gesture(samples_by_gesture),
+            "capture_quality": capture_quality
+        }
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def load_pending_samples(self) -> tuple[dict, dict] | None:
+        from .config_store import profile_calibration_dir
+        from .gesture_ml import deserialize_samples_by_gesture
+        import json
+
+        path = profile_calibration_dir(self.profile_name) / "pending_samples.json"
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            samples = deserialize_samples_by_gesture(payload.get("samples_by_gesture", {}))
+            quality = payload.get("capture_quality", {})
+            return samples, quality
+        except Exception:
+            return None
+
+    def clear_pending_samples(self) -> None:
+        from .config_store import profile_calibration_dir
+        path = profile_calibration_dir(self.profile_name) / "pending_samples.json"
+        if path.exists():
+            try:
+                path.unlink()
+            except Exception:
+                pass
+
     def train(self, samples_by_gesture: dict, capture_quality_summary: dict | None = None) -> GestureClassifier:
         self.classifier = GestureClassifier(self.profile_name, window_size=self.window_size)
         self.classifier.fit(samples_by_gesture, capture_quality_summary=capture_quality_summary)

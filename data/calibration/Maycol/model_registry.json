@@ -1,0 +1,36 @@
+{
+  "profile": "Maycol",
+  "active_version": 1,
+  "versions": [
+    {
+      "version": 1,
+      "trained_at": "2026-06-04T20:39:18.970810",
+      "model_path": "Maycol_gesture_model_v1.pkl",
+      "dataset_path": "Maycol_landmark_dataset_v1.json",
+      "classes": [
+        "both_eyes_closed_intent",
+        "brows_up",
+        "confirm",
+        "left_blink_intent",
+        "mouth_open_hold",
+        "neutral",
+        "right_blink_intent",
+        "smile"
+      ],
+      "training_windows": 157,
+      "train_windows": 118,
+      "validation_windows": 39,
+      "validation_accuracy": 0.7435897435897436,
+      "recommended_thresholds": {
+        "both_eyes_closed_intent": 0.6,
+        "brows_up": 0.5,
+        "confirm": 0.5,
+        "left_blink_intent": 0.5,
+        "mouth_open_hold": 0.5,
+        "neutral": 0.5,
+        "right_blink_intent": 0.5,
+        "smile": 0.5
+      }
+    }
+  ]
+}

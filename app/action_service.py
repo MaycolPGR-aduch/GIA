@@ -61,9 +61,17 @@ class ActionService:
         elif command_id == "guide" and self.main_gui_interface:
             self.main_gui_interface.show_guide_dialog()
         elif command_id == "compact_ui" and self.main_gui_interface:
-            self.main_gui_interface.root.after(0, self.main_gui_interface.enter_compact_mode)
+            if hasattr(self.main_gui_interface, "root"):
+                self.main_gui_interface.root.after(0, self.main_gui_interface.enter_compact_mode)
+            else:
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(0, self.main_gui_interface.enter_compact_mode)
         elif command_id == "expand_ui" and self.main_gui_interface:
-            self.main_gui_interface.root.after(0, self.main_gui_interface.exit_compact_mode)
+            if hasattr(self.main_gui_interface, "root"):
+                self.main_gui_interface.root.after(0, self.main_gui_interface.exit_compact_mode)
+            else:
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(0, self.main_gui_interface.exit_compact_mode)
         elif command_id == "quit":
             self.on_quit()
         elif command_id.startswith("volume_"):

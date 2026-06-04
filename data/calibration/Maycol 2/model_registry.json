@@ -1,0 +1,66 @@
+{
+  "profile": "Maycol 2",
+  "active_version": 2,
+  "versions": [
+    {
+      "version": 1,
+      "trained_at": "2026-06-04T22:45:51.292504",
+      "model_path": "Maycol 2_gesture_model_v1.pkl",
+      "dataset_path": "Maycol 2_landmark_dataset_v1.json",
+      "classes": [
+        "both_eyes_closed_intent",
+        "brows_up",
+        "confirm",
+        "left_blink_intent",
+        "mouth_open_hold",
+        "neutral",
+        "right_blink_intent",
+        "smile"
+      ],
+      "training_windows": 1399,
+      "train_windows": 1049,
+      "validation_windows": 350,
+      "validation_accuracy": 0.9942857142857143,
+      "recommended_thresholds": {
+        "both_eyes_closed_intent": 0.783,
+        "brows_up": 0.827,
+        "confirm": 0.9,
+        "left_blink_intent": 0.755,
+        "mouth_open_hold": 0.822,
+        "neutral": 0.553,
+        "right_blink_intent": 0.462,
+        "smile": 0.817
+      }
+    },
+    {
+      "version": 2,
+      "trained_at": "2026-06-04T23:01:32.892753",
+      "model_path": "Maycol 2_gesture_model_v2.pkl",
+      "dataset_path": "Maycol 2_landmark_dataset_v2.json",
+      "classes": [
+        "both_eyes_closed_intent",
+        "brows_up",
+        "confirm",
+        "left_blink_intent",
+        "mouth_open_hold",
+        "neutral",
+        "right_blink_intent",
+        "smile"
+      ],
+      "training_windows": 1399,
+      "train_windows": 1049,
+      "validation_windows": 350,
+      "validation_accuracy": 0.9028571428571428,
+      "recommended_thresholds": {
+        "both_eyes_closed_intent": 0.715,
+        "brows_up": 0.541,
+        "confirm": 0.9,
+        "left_blink_intent": 0.53,
+        "mouth_open_hold": 0.777,
+        "neutral": 0.407,
+        "right_blink_intent": 0.449,
+        "smile": 0.598
+      }
+    }
+  ]
+}

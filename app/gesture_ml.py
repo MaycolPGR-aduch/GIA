@@ -6,7 +6,7 @@ from datetime import datetime
 
 import joblib
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
 from .config_store import (
@@ -21,28 +21,53 @@ from .config_store import (
 from .models import FaceSample, GesturePrediction
 
 
+class DeterministicGRUEncoder:
+    def __init__(self, input_dim: int = 5, hidden_dim: int = 32, seed: int = 42):
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        rng = np.random.default_rng(seed)
+        
+        # Update gate weights
+        self.W_z = rng.normal(0.0, 0.1, (input_dim, hidden_dim)).astype(np.float32)
+        self.U_z = rng.normal(0.0, 0.1, (hidden_dim, hidden_dim)).astype(np.float32)
+        self.b_z = np.zeros(hidden_dim, dtype=np.float32)
+        
+        # Reset gate weights
+        self.W_r = rng.normal(0.0, 0.1, (input_dim, hidden_dim)).astype(np.float32)
+        self.U_r = rng.normal(0.0, 0.1, (hidden_dim, hidden_dim)).astype(np.float32)
+        self.b_r = np.zeros(hidden_dim, dtype=np.float32)
+        
+        # Candidate hidden state weights
+        self.W_h = rng.normal(0.0, 0.1, (input_dim, hidden_dim)).astype(np.float32)
+        self.U_h = rng.normal(0.0, 0.1, (hidden_dim, hidden_dim)).astype(np.float32)
+        self.b_h = np.zeros(hidden_dim, dtype=np.float32)
+
+    def _sigmoid(self, x: np.ndarray) -> np.ndarray:
+        return 1.0 / (1.0 + np.exp(-np.clip(x, -20.0, 20.0)))
+
+    def encode(self, sequence: np.ndarray) -> np.ndarray:
+        h = np.zeros(self.hidden_dim, dtype=np.float32)
+        for t in range(sequence.shape[0]):
+            x_t = sequence[t]
+            z_t = self._sigmoid(np.dot(x_t, self.W_z) + np.dot(h, self.U_z) + self.b_z)
+            r_t = self._sigmoid(np.dot(x_t, self.W_r) + np.dot(h, self.U_r) + self.b_r)
+            h_tilde = np.tanh(np.dot(x_t, self.W_h) + np.dot(r_t * h, self.U_h) + self.b_h)
+            h = (1.0 - z_t) * h + z_t * h_tilde
+        return h
+
+
 class GestureFeatureExtractor:
     def __init__(self, window_size: int = 12):
         self.window_size = window_size
+        self.gru = DeterministicGRUEncoder(input_dim=5, hidden_dim=32, seed=42)
 
     def extract(self, samples: list[FaceSample]) -> np.ndarray:
         window = samples[-self.window_size :]
-        landmark_stack = np.stack([sample.normalized_landmarks.flatten() for sample in window])
         metric_order = sorted(window[0].metrics.keys())
         metric_stack = np.stack([[sample.metrics[name] for name in metric_order] for sample in window])
-
-        feature_vector = np.concatenate(
-            [
-                landmark_stack.flatten(),
-                metric_stack.flatten(),
-                landmark_stack.mean(axis=0),
-                landmark_stack.std(axis=0),
-                metric_stack.mean(axis=0),
-                metric_stack.std(axis=0),
-                (landmark_stack[-1] - landmark_stack[0]),
-                (metric_stack[-1] - metric_stack[0]),
-            ]
-        )
+        
+        sequence = metric_stack.astype(np.float32)
+        feature_vector = self.gru.encode(sequence)
         return feature_vector.astype(np.float32)
 
 
@@ -94,7 +119,7 @@ class GestureClassifier:
         self.summary_path = active_dataset_summary_path(profile_name)
         self.model_path = legacy_model_path(profile_name)
         self.samples_path = legacy_dataset_summary_path(profile_name)
-        self.model: RandomForestClassifier | None = None
+        self.model: LogisticRegression | None = None
         self.labels: list[str] = []
         self.training_summary: dict = {}
         self.active_version: int | None = None
@@ -134,9 +159,9 @@ class GestureClassifier:
                 if true_label == class_name and predicted_labels[row_index] == class_name
             ]
             if confidences:
-                threshold = float(np.clip(np.quantile(confidences, 0.25), 0.50, 0.92))
+                threshold = float(np.clip(np.quantile(confidences, 0.25), 0.25, 0.90))
             else:
-                threshold = 0.60
+                threshold = 0.30
             thresholds[str(class_name)] = round(threshold, 3)
             total_rows = sum(1 for true_label in true_labels if true_label == class_name)
             if total_rows == 0:
@@ -174,6 +199,11 @@ class GestureClassifier:
             self.labels = payload["labels"]
             self.training_summary = payload.get("training_summary", {})
             self.active_version = target_version
+            
+            # Sincronizar el tamaño de ventana guardado
+            if "window_size" in self.training_summary:
+                self.window_size = int(self.training_summary["window_size"])
+                self.extractor.window_size = self.window_size
             return True
 
         legacy_path = legacy_model_path(self.profile_name)
@@ -186,6 +216,11 @@ class GestureClassifier:
             self.training_summary = payload.get("training_summary", {})
             self.active_version = None
             self.active_dataset_path = None
+            
+            # Sincronizar el tamaño de ventana guardado
+            if "window_size" in self.training_summary:
+                self.window_size = int(self.training_summary["window_size"])
+                self.extractor.window_size = self.window_size
             return True
 
         return False
@@ -251,10 +286,12 @@ class GestureClassifier:
         next_version = (max(existing_versions) + 1) if existing_versions else 1
 
         feature_matrix = np.vstack(train_features)
-        self.model = RandomForestClassifier(
-            n_estimators=300,
+        self.model = LogisticRegression(
+            C=20.0,
+            penalty="l2",
+            class_weight="balanced",
+            max_iter=1000,
             random_state=42,
-            class_weight="balanced_subsample",
         )
         self.model.fit(feature_matrix, np.array(train_labels))
         self.labels = sorted(set(train_labels))
@@ -303,8 +340,7 @@ class GestureClassifier:
             "training_windows": int(feature_matrix.shape[0] + len(validation_features)),
             "classes": self.labels,
             "windows_per_class": class_windows,
-            "model_type": "RandomForestClassifier",
-            "n_estimators": 300,
+            "model_type": "LogisticRegression",
             "model_path": str(self.model_path),
             "dataset_path": str(dataset_path),
             "validation_accuracy": validation_accuracy,

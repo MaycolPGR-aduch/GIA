@@ -1,0 +1,5 @@
+{"timestamp": "2026-06-04T20:29:49.123104", "event_type": "session", "detail": "Inicio de sesión", "state": "ready", "model_version": 4}
+{"timestamp": "2026-06-04T20:29:50.770465", "event_type": "runtime", "detail": "Runtime iniciado", "profile": "default", "model_version": 4}
+{"timestamp": "2026-06-04T20:30:36.087392", "event_type": "state", "detail": "Cambio de pausa", "state": "paused"}
+{"timestamp": "2026-06-04T20:30:37.831855", "event_type": "state", "detail": "Cambio de pausa", "state": "ready"}
+{"timestamp": "2026-06-04T20:31:27.146980", "event_type": "session", "detail": "Fin de sesión", "state": "stopped"}
