@@ -1,4 +1,23 @@
 {
+  "voice_model_size": "small",
+  "voice_commands_enabled": true,
+  "voice_builtin_alias_overrides": {},
+  "voice_custom_commands": [
+    {
+      "id": "navegar",
+      "label": "Navegar",
+      "spoken_phrases": [
+        "Navegar"
+      ],
+      "action_type": "macro",
+      "macro_keys": [
+        "win",
+        "e"
+      ],
+      "direct_action_id": null,
+      "enabled": true
+    }
+  ],
   "camera_index": 0,
   "camera_resolution": "1280x720",
   "fps": 15,
@@ -9,6 +28,9 @@
   "face_stability_threshold": 0.035,
   "voice_enabled": true,
   "tts_enabled": false,
+  "audio_input_device": null,
+  "voice_sample_rate": 16000,
+  "voice_record_seconds": 3.0,
   "high_contrast": false,
   "font_scale": 1.0,
   "gesture_window_size": 12

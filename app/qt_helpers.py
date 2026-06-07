@@ -176,6 +176,19 @@ QLineEdit, QSpinBox, QDoubleSpinBox {
     padding: 6px 12px;
 }
 
+QTextEdit {
+    background-color: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    padding: 8px 10px;
+    color: #f8fafc;
+    selection-background-color: #2563eb;
+}
+
+QTextEdit[readOnly="true"] {
+    background-color: #0f172a;
+}
+
 QGroupBox {
     border: 1px solid #1e293b;
     border-radius: 8px;

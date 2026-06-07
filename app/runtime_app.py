@@ -2,22 +2,25 @@ from __future__ import annotations
 
 import sys
 import webbrowser
+from html import escape
 from PySide6.QtCore import Qt, Slot, QPoint, QObject, Signal
-from PySide6.QtGui import QImage, QPixmap, QFont, QCloseEvent, QPainter, QBrush, QPen
+from PySide6.QtGui import QPixmap, QFont, QCloseEvent
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTextEdit, QCheckBox, QGroupBox, QListWidget,
-    QFormLayout, QMessageBox, QDialog, QScrollArea, QGridLayout
+    QFormLayout, QMessageBox, QDialog, QScrollArea, QGridLayout, QProgressBar
 )
 
-from app.gesture_catalog import GESTURE_CATALOG, VOICE_COMMAND_HELP
+from app.gesture_catalog import get_enabled_gesture_catalog
 from app.qt_helpers import numpy_to_qimage, MODERN_STYLE
+from app.voice_router import get_voice_help_rows
 
 
 class RuntimeSignals(QObject):
     video_update = Signal(object, object)
     status_update = Signal(dict)
     event_update = Signal(str)
+    ui_action = Signal(object)
 
 
 class CompactWindow(QWidget):
@@ -72,8 +75,9 @@ class CompactWindow(QWidget):
         video_layout = QVBoxLayout(self.video_frame)
         video_layout.setContentsMargins(0, 0, 0, 0)
         self.video_label = QLabel("Feed")
+        self.video_label.setFixedSize(240, 135)
         self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setStyleSheet("border-radius: 12px;")
+        self.video_label.setStyleSheet("background-color: #020617; border-radius: 12px;")
         video_layout.addWidget(self.video_label)
         layout.addWidget(self.video_frame)
 
@@ -96,6 +100,11 @@ class CompactWindow(QWidget):
         self.voice_label.setStyleSheet("color: #cbd5e1;")
         self.voice_label.setWordWrap(True)
         right_layout.addWidget(self.voice_label)
+
+        self.mic_label = QLabel("Mic: sin datos")
+        self.mic_label.setStyleSheet("color: #93c5fd;")
+        self.mic_label.setWordWrap(True)
+        right_layout.addWidget(self.mic_label)
 
         # Log de eventos
         self.event_log = QTextEdit()
@@ -132,14 +141,16 @@ class RuntimeMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.controller = None
+        self.settings = {}
         self.is_compact_mode = False
         self.compact_window = None
-        self.gesture_title_map = {gesture["id"]: gesture["title"] for gesture in GESTURE_CATALOG}
+        self.gesture_title_map = {gesture["id"]: gesture["title"] for gesture in get_enabled_gesture_catalog()}
         
         self.signals = RuntimeSignals()
         self.signals.video_update.connect(self.update_video_feed)
         self.signals.status_update.connect(self.update_status)
         self.signals.event_update.connect(self.append_event)
+        self.signals.ui_action.connect(self._run_ui_action)
         
         self.init_ui()
 
@@ -201,14 +212,31 @@ class RuntimeMainWindow(QMainWindow):
         self.lbl_voice_cmd.setWordWrap(True)
         metrics_layout.addWidget(self.lbl_voice_cmd, 4, 0, 1, 2)
 
+        self.lbl_mic_status = QLabel("Microfono: sin datos")
+        self.lbl_mic_status.setWordWrap(True)
+        metrics_layout.addWidget(self.lbl_mic_status, 5, 0, 1, 2)
+
+        self.mic_level_bar = QProgressBar()
+        self.mic_level_bar.setRange(0, 100)
+        self.mic_level_bar.setValue(0)
+        self.mic_level_bar.setFormat("Nivel %p%")
+        self.mic_level_bar.setStyleSheet(
+            "QProgressBar { background-color: #0f172a; border: 1px solid #334155; border-radius: 6px; text-align: center; color: #e2e8f0; }"
+            "QProgressBar::chunk { background-color: #22c55e; border-radius: 5px; }"
+        )
+        metrics_layout.addWidget(self.mic_level_bar, 6, 0, 1, 2)
+
+        self.lbl_mic_activity = QLabel("Actividad: 0% | Pico: 0%")
+        metrics_layout.addWidget(self.lbl_mic_activity, 7, 0, 1, 2)
+
         self.lbl_rejection = QLabel("Rechazo técnico: -")
         self.lbl_rejection.setStyleSheet("color: #ef4444;")
         self.lbl_rejection.setWordWrap(True)
-        metrics_layout.addWidget(self.lbl_rejection, 5, 0, 1, 2)
+        metrics_layout.addWidget(self.lbl_rejection, 8, 0, 1, 2)
 
         self.lbl_model_version = QLabel("Modelo: -")
         self.lbl_model_version.setWordWrap(True)
-        metrics_layout.addWidget(self.lbl_model_version, 6, 0, 1, 2)
+        metrics_layout.addWidget(self.lbl_model_version, 9, 0, 1, 2)
 
         right_layout.addWidget(metrics_box)
 
@@ -234,18 +262,26 @@ class RuntimeMainWindow(QMainWindow):
         btn_compact.clicked.connect(self.enter_compact_mode)
         actions_layout.addWidget(btn_compact, 1, 1)
 
-        btn_guide = QPushButton("Guía rápida")
+        btn_guide = QPushButton("Guia rapida")
         btn_guide.clicked.connect(self.show_guide_dialog)
         actions_layout.addWidget(btn_guide, 2, 0)
+
+        btn_voice_guide = QPushButton("Comandos de voz")
+        btn_voice_guide.clicked.connect(self.show_voice_commands_dialog)
+        actions_layout.addWidget(btn_voice_guide, 2, 1)
+
+        btn_voice_test = QPushButton("Probar voz")
+        btn_voice_test.clicked.connect(self._test_voice)
+        actions_layout.addWidget(btn_voice_test, 3, 0)
 
         btn_close = QPushButton("Cerrar sistema")
         btn_close.setObjectName("dangerButton")
         btn_close.clicked.connect(self._quit)
-        actions_layout.addWidget(btn_close, 2, 1)
+        actions_layout.addWidget(btn_close, 3, 1)
 
-        self.check_camera_metrics = QCheckBox("Mostrar métricas sobre la cámara")
+        self.check_camera_metrics = QCheckBox("Mostrar metricas sobre la camara")
         self.check_camera_metrics.toggled.connect(self._toggle_camera_metrics)
-        actions_layout.addWidget(self.check_camera_metrics, 3, 0, 1, 2)
+        actions_layout.addWidget(self.check_camera_metrics, 4, 0, 1, 2)
 
         right_layout.addWidget(actions_box)
 
@@ -261,8 +297,17 @@ class RuntimeMainWindow(QMainWindow):
 
     def set_controller(self, controller):
         self.controller = controller
+        self.settings = dict(getattr(controller, "settings", {}) or {})
         if hasattr(self.controller, "set_camera_overlay_details"):
             self.controller.set_camera_overlay_details(self.check_camera_metrics.isChecked())
+
+    @Slot(object)
+    def _run_ui_action(self, callback):
+        if callable(callback):
+            callback()
+
+    def run_on_ui_thread(self, callback):
+        self.signals.ui_action.emit(callback)
 
     def update_video_feed(self, frame_rgb, compact_frame_rgb=None):
         try:
@@ -273,44 +318,44 @@ class RuntimeMainWindow(QMainWindow):
                 self.video_label.setPixmap(scaled)
 
             if compact_frame_rgb is not None and self.compact_window is not None:
-                # Dibujar un feed de cámara recortado circular o bordes redondeados
                 image_c = numpy_to_qimage(compact_frame_rgb)
                 pix_c = QPixmap.fromImage(image_c)
-                
-                # Crear imagen de destino
-                target = QPixmap(240, 135)
-                target.fill(Qt.transparent)
-                
-                painter = QPainter(target)
-                painter.setRenderHint(QPainter.Antialiasing)
-                # Crear máscara redondeada
-                path = QBrush(pix_c.scaled(240, 135, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
-                painter.setBrush(path)
-                painter.setPen(Qt.NoPen)
-                painter.drawRoundedRect(0, 0, 240, 135, 12, 12)
-                painter.end()
-                
-                self.compact_window.video_label.setPixmap(target)
+                scaled_compact = pix_c.scaled(
+                    self.compact_window.video_label.size(),
+                    Qt.KeepAspectRatioByExpanding,
+                    Qt.SmoothTransformation,
+                )
+                self.compact_window.video_label.setText("")
+                self.compact_window.video_label.setPixmap(scaled_compact)
         except Exception as exc:
             self.append_event(f"Error en video: {exc}")
 
     def update_status(self, payload: dict):
-        status_text = payload.get("status_text", "Sin estado")
+        status_text = self._display_text(payload.get("status_text", "Sin estado"))
         self.status_label.setText(status_text)
         
         # Actualizar labels principales
         gesture_id = payload.get("gesture", "-")
         self.lbl_gesture.setText(f"Gesto: {self._format_gesture_label(gesture_id)}")
         self.lbl_confidence.setText(f"Confianza: {payload.get('confidence', '-')}")
-        self.lbl_face.setText(f"Rostro: {payload.get('face', '-')}")
-        self.lbl_mode.setText(f"Modo: {payload.get('mode', '-')}")
-        self.lbl_cursor.setText(f"Cursor: {payload.get('cursor', '-')}")
-        self.lbl_voice_state.setText(f"Voz: {payload.get('voice_state', 'en espera')}")
-        self.lbl_voice_text.setText(f"Texto: {payload.get('voice_text', '-')}")
-        self.lbl_voice_cmd.setText(f"Comando: {payload.get('voice_command', '-')}")
-        self.lbl_rejection.setText(f"Rechazo técnico: {payload.get('rejection_reason', '-')}")
+        self.lbl_face.setText(f"Rostro: {self._display_text(payload.get('face', '-'))}")
+        self.lbl_mode.setText(f"Modo: {self._display_text(payload.get('mode', '-'))}")
+        self.lbl_cursor.setText(f"Cursor: {self._display_text(payload.get('cursor', '-'))}")
+        self.lbl_voice_state.setText(f"Voz: {self._display_text(payload.get('voice_state', 'en espera'))}")
+        self.lbl_voice_text.setText(f"Texto: {self._display_text(payload.get('voice_text', '-'))}")
+        self.lbl_voice_cmd.setText(f"Comando: {self._display_text(payload.get('voice_command', '-'))}")
+        mic_status = self._display_text(payload.get("mic_monitor_status", "sin datos"))
+        mic_device = self._display_text(payload.get("mic_device", "Desconocido"))
+        mic_level = int(payload.get("mic_level", 0) or 0)
+        mic_peak = int(payload.get("mic_peak", 0) or 0)
+        mic_activity = float(payload.get("mic_active_ratio", 0.0) or 0.0)
+        self.lbl_mic_status.setText(f"Microfono: {mic_status} | {mic_device}")
+        self.mic_level_bar.setValue(max(0, min(mic_level, 100)))
+        self._update_mic_bar_style(mic_level)
+        self.lbl_mic_activity.setText(f"Actividad: {int(mic_activity * 100)}% | Pico: {mic_peak}%")
+        self.lbl_rejection.setText(f"Rechazo tecnico: {self._display_text(payload.get('rejection_reason', '-'))}")
         
-        diag = payload.get('diagnostic_hint', '-')
+        diag = self._display_text(payload.get('diagnostic_hint', '-'))
         self.lbl_model_version.setText(f"Modelo: v{payload.get('model_version', '-')} | Hint: {diag}")
 
         self._update_stateful_buttons(payload)
@@ -319,15 +364,31 @@ class RuntimeMainWindow(QMainWindow):
         if self.compact_window is not None:
             self.compact_window.status_label.setText(status_text)
             self.compact_window.voice_label.setText(
-                f"Voz: {payload.get('voice_state', 'en espera')} | "
-                f"Texto: {payload.get('voice_text', '-')} | "
-                f"Comando: {payload.get('voice_command', '-')}"
+                f"Voz: {self._display_text(payload.get('voice_state', 'en espera'))} | "
+                f"Texto: {self._display_text(payload.get('voice_text', '-'))} | "
+                f"Comando: {self._display_text(payload.get('voice_command', '-'))}"
+            )
+            self.compact_window.mic_label.setText(
+                f"Mic: {mic_status} | Nivel: {mic_level}% | Pico: {mic_peak}%"
             )
 
     def _format_gesture_label(self, gesture_id):
         if not gesture_id or gesture_id == "-":
             return "-"
-        return self.gesture_title_map.get(gesture_id, str(gesture_id).replace("_", " "))
+        label = self.gesture_title_map.get(gesture_id, str(gesture_id).replace("_", " "))
+        return self._display_text(label)
+
+    def _update_mic_bar_style(self, level: int):
+        if level >= 70:
+            color = "#ef4444"
+        elif level >= 35:
+            color = "#f59e0b"
+        else:
+            color = "#22c55e"
+        self.mic_level_bar.setStyleSheet(
+            "QProgressBar { background-color: #0f172a; border: 1px solid #334155; border-radius: 6px; text-align: center; color: #e2e8f0; }"
+            f"QProgressBar::chunk {{ background-color: {color}; border-radius: 5px; }}"
+        )
 
     def _update_stateful_buttons(self, payload: dict):
         mode = payload.get("mode", "-")
@@ -353,56 +414,174 @@ class RuntimeMainWindow(QMainWindow):
         if self.compact_window is not None:
             self.compact_window.event_log.append(f"- {text}")
 
-    def show_guide_dialog(self):
+    @staticmethod
+    def _display_text(value) -> str:
+        text = "" if value is None else str(value)
+        if any(marker in text for marker in ("\u00c3", "\u00c2", "\u00e2")):
+            try:
+                text = text.encode("latin-1").decode("utf-8")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
+        return text
+
+    def _add_help_label(self, layout: QVBoxLayout, text: str, object_name: str, rich_text: bool = False):
+        label = QLabel(text)
+        label.setObjectName(object_name)
+        label.setWordWrap(True)
+        label.setTextFormat(Qt.RichText if rich_text else Qt.AutoText)
+        layout.addWidget(label)
+        return label
+
+    def _build_help_dialog(self, title: str, size: tuple[int, int]) -> tuple[QDialog, QVBoxLayout]:
         dialog = QDialog(self)
-        dialog.setWindowTitle("Guía de interacción GIA")
-        dialog.resize(600, 500)
-        dialog.setStyleSheet(MODERN_STYLE)
+        dialog.setWindowTitle(title)
+        dialog.resize(*size)
+        dialog.setObjectName("helpDialog")
+        dialog.setStyleSheet(
+            MODERN_STYLE
+            + """
+QDialog#helpDialog {
+    background-color: #0f172a;
+}
+QScrollArea#helpScroll {
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    background-color: #0f172a;
+}
+QScrollArea#helpScroll QWidget#qt_scrollarea_viewport {
+    background-color: #0f172a;
+}
+QWidget#helpScrollWidget {
+    background-color: #0f172a;
+}
+QWidget#helpViewport {
+    background-color: #0f172a;
+}
+QLabel#helpTitle {
+    color: #f8fafc;
+    font-size: 16px;
+    font-weight: bold;
+}
+QLabel#helpSection {
+    color: #93c5fd;
+    font-size: 14px;
+    font-weight: bold;
+}
+QLabel#helpBody {
+    color: #e2e8f0;
+    background-color: transparent;
+}
+"""
+        )
 
         lay = QVBoxLayout(dialog)
         scroll = QScrollArea()
+        scroll.setObjectName("helpScroll")
         scroll.setWidgetResizable(True)
+        scroll.viewport().setObjectName("helpViewport")
         lay.addWidget(scroll)
 
         scroll_widget = QWidget()
+        scroll_widget.setObjectName("helpScrollWidget")
         scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setContentsMargins(18, 18, 18, 18)
+        scroll_layout.setSpacing(12)
         scroll.setWidget(scroll_widget)
+        return dialog, scroll_layout
 
-        # Gestos
-        title_g = QLabel("Gestos Faciales")
-        title_g.setFont(QFont("Segoe UI", 12, QFont.Bold))
-        scroll_layout.addWidget(title_g)
+    def show_guide_dialog(self):
+        dialog, scroll_layout = self._build_help_dialog("Guia de interaccion GIA", (640, 540))
 
-        for gesture in GESTURE_CATALOG:
-            item = QLabel(f"<b>{gesture['title']}</b> &rarr; {gesture['action']}<br/>"
-                          f"<font color='#94a3b8'>{gesture['duration_ms']}ms | {gesture['warning']}</font>")
-            item.setWordWrap(True)
-            scroll_layout.addWidget(item)
+        self._add_help_label(scroll_layout, "Guia rapida de interaccion", "helpTitle")
+        self._add_help_label(
+            scroll_layout,
+            "Este panel resume los gestos activos, la duracion sugerida y las acciones disponibles.",
+            "helpBody",
+        )
+        self._add_help_label(scroll_layout, "Gestos faciales", "helpSection")
 
-        # Comando de voz
-        title_v = QLabel("<br/>Comandos de Voz")
-        title_v.setFont(QFont("Segoe UI", 12, QFont.Bold))
-        scroll_layout.addWidget(title_v)
+        for gesture in get_enabled_gesture_catalog():
+            title = escape(self._display_text(gesture["title"]))
+            action = escape(self._display_text(gesture["action"]))
+            warning = escape(self._display_text(gesture["warning"]))
+            help_html = (
+                f"<b>{title}</b> &rarr; {action}<br/>"
+                f"<span style='color:#94a3b8;'>Duracion: {gesture['duration_ms']} ms | {warning}</span>"
+            )
+            self._add_help_label(scroll_layout, help_html, "helpBody", rich_text=True)
 
-        for command, desc in VOICE_COMMAND_HELP:
-            item = QLabel(f"<b>\"{command}\"</b> &rarr; {desc}")
-            item.setWordWrap(True)
-            scroll_layout.addWidget(item)
+        self._add_help_label(scroll_layout, "Comandos de voz", "helpSection")
+        self._add_help_label(
+            scroll_layout,
+            "Usa el boton <b>Comandos de voz</b> del panel lateral para ver las frases exactas, "
+            "como activarlas y para que sirve cada una.",
+            "helpBody",
+            rich_text=True,
+        )
 
-        # Enlaces
-        title_l = QLabel("<br/>Accesos Rápidos Web")
-        title_l.setFont(QFont("Segoe UI", 12, QFont.Bold))
-        scroll_layout.addWidget(title_l)
+        for row in get_voice_help_rows(self.settings):
+            help_html = (
+                f"<b>{escape(self._display_text(row['label']))}</b> &rarr; "
+                f"{escape(self._display_text(row['description']))}"
+            )
+            self._add_help_label(scroll_layout, help_html, "helpBody", rich_text=True)
+
+        self._add_help_label(scroll_layout, "Accesos rapidos web", "helpSection")
 
         for name, url in [
             ("Abrir Gmail", "https://gmail.com"),
             ("Abrir Facebook", "https://facebook.com"),
             ("Abrir WhatsApp", "https://web.whatsapp.com"),
-            ("Abrir YouTube", "https://youtube.com")
+            ("Abrir YouTube", "https://youtube.com"),
         ]:
             btn = QPushButton(name)
             btn.clicked.connect(lambda checked=False, link=url: webbrowser.open(link))
             scroll_layout.addWidget(btn)
+
+        dialog.exec()
+
+    def show_voice_commands_dialog(self):
+        dialog, scroll_layout = self._build_help_dialog("Comandos de voz activos", (720, 620))
+
+        self._add_help_label(scroll_layout, "Como usar los comandos de voz", "helpTitle")
+        intro = (
+            "1. Manten ambos ojos cerrados de forma deliberada para activar la escucha.<br/>"
+            "2. Espera el estado <b>Escuchando</b>.<br/>"
+            "3. Di una de las frases activas de forma clara.<br/>"
+            "4. Revisa en el panel derecho el texto reconocido y el comando resultante."
+        )
+        self._add_help_label(scroll_layout, intro, "helpBody", rich_text=True)
+        self._add_help_label(
+            scroll_layout,
+            "<b>Consejo:</b> usa frases cortas y directas. El sistema funciona mejor con "
+            "comandos cerrados que con lenguaje muy libre.",
+            "helpBody",
+            rich_text=True,
+        )
+        self._add_help_label(
+            scroll_layout,
+            "Tambien puedes usar el boton <b>Probar voz</b> del panel lateral para depurar "
+            "microfono, transcripcion y comando sin depender del gesto de ojos cerrados.",
+            "helpBody",
+            rich_text=True,
+        )
+        self._add_help_label(scroll_layout, "Comandos disponibles", "helpSection")
+
+        for row in get_voice_help_rows(self.settings):
+            examples = ", ".join(f'"{alias}"' for alias in row.get("spoken_examples", [])[:4]) if row.get("spoken_examples") else "Sin aliases configurados"
+            item = (
+                f"<b>{escape(self._display_text(row['label']))}</b><br/>"
+                f"<span style='color:#94a3b8;'>Que hace:</span> {escape(self._display_text(row['description']))}<br/>"
+                f"<span style='color:#94a3b8;'>Frases activas:</span> "
+                f"{escape(self._display_text(examples))}"
+            )
+            self._add_help_label(scroll_layout, item, "helpBody", rich_text=True)
+
+        footer = (
+            "<b>Observacion:</b> si una frase no se activa, revisa los campos "
+            "<b>Texto</b> y <b>Comando</b> del panel derecho para ver que interpreto el sistema."
+        )
+        self._add_help_label(scroll_layout, footer, "helpBody", rich_text=True)
 
         dialog.exec()
 
@@ -443,6 +622,10 @@ class RuntimeMainWindow(QMainWindow):
     def _toggle_camera_metrics(self, checked):
         if self.controller:
             self.controller.set_camera_overlay_details(checked)
+
+    def _test_voice(self):
+        if self.controller and hasattr(self.controller, "start_manual_voice_test"):
+            self.controller.start_manual_voice_test()
 
     def _quit(self):
         if self.controller:

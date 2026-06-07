@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from .gesture_catalog import GESTURE_CATALOG, NEUTRAL_GESTURE_META
+from .gesture_catalog import NEUTRAL_GESTURE_META, get_enabled_gesture_catalog
 from .models import FaceSample, GestureTrainingStatus
 
 
@@ -12,9 +12,10 @@ MIN_FACE_SCALE_PX = 90.0
 class CalibrationService:
     def __init__(self, window_size: int):
         self.window_size = window_size
-        self.gesture_order = ["neutral"] + [gesture["id"] for gesture in GESTURE_CATALOG]
+        enabled_gestures = get_enabled_gesture_catalog()
+        self.gesture_order = ["neutral"] + [gesture["id"] for gesture in enabled_gestures]
         self.gesture_meta = {"neutral": deepcopy(NEUTRAL_GESTURE_META)}
-        self.gesture_meta.update({gesture["id"]: deepcopy(gesture) for gesture in GESTURE_CATALOG})
+        self.gesture_meta.update({gesture["id"]: deepcopy(gesture) for gesture in enabled_gestures})
         self.samples_by_gesture: dict[str, list[FaceSample]] = {gesture_id: [] for gesture_id in self.gesture_order}
         self.capture_quality: dict[str, dict] = {gesture_id: self._blank_quality(gesture_id) for gesture_id in self.gesture_order}
         self.pending_retraining = False

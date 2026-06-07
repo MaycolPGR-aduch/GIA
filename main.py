@@ -7,9 +7,10 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLabel, QComboBox, QPushButton, QMessageBox
 )
 
-from app.config_store import ensure_app_dirs, load_settings, list_profiles, load_profile
+from app.config_store import ensure_app_dirs, load_settings, list_profiles, load_profile, save_settings
 from app.qt_helpers import MODERN_STYLE
 from app.runtime_app import run_qt_runtime
+from app.voice_command_config_dialog import VoiceCommandConfigDialog
 
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
@@ -26,7 +27,7 @@ class ProfileSelector(QWidget):
 
     def init_ui(self):
         self.setWindowTitle("GIA v2 - Inicio de Sesión")
-        self.resize(400, 220)
+        self.resize(420, 280)
         self.setStyleSheet(MODERN_STYLE)
 
         layout = QVBoxLayout(self)
@@ -45,6 +46,10 @@ class ProfileSelector(QWidget):
         btn_start.setObjectName("accentButton")
         btn_start.clicked.connect(self.on_start_clicked)
         layout.addWidget(btn_start)
+
+        btn_voice_config = QPushButton("Configuracion de comandos de voz")
+        btn_voice_config.clicked.connect(self.open_voice_command_settings)
+        layout.addWidget(btn_voice_config)
 
         btn_quit = QPushButton("Cerrar")
         btn_quit.clicked.connect(self.close)
@@ -76,6 +81,13 @@ class ProfileSelector(QWidget):
 
         self.selected_profile_data = profile
         self.close()
+
+    def open_voice_command_settings(self):
+        dialog = VoiceCommandConfigDialog(self.settings, self)
+        if dialog.exec():
+            self.settings = dialog.get_updated_settings()
+            save_settings(self.settings)
+            QMessageBox.information(self, "Configuracion guardada", "Los comandos globales de voz se actualizaron.")
 
 
 def main():

@@ -1,6 +1,7 @@
 GESTURE_CATALOG = [
     {
         "id": "left_blink_intent",
+        "enabled": True,
         "title": "Guino izquierdo intencional",
         "action": "Clic izquierdo",
         "duration_ms": 350,
@@ -13,6 +14,7 @@ GESTURE_CATALOG = [
     },
     {
         "id": "right_blink_intent",
+        "enabled": True,
         "title": "Guino derecho intencional",
         "action": "Clic derecho",
         "duration_ms": 350,
@@ -25,6 +27,7 @@ GESTURE_CATALOG = [
     },
     {
         "id": "both_eyes_closed_intent",
+        "enabled": True,
         "title": "Ambos ojos cerrados",
         "action": "Escuchar comando de voz",
         "duration_ms": 900,
@@ -37,6 +40,7 @@ GESTURE_CATALOG = [
     },
     {
         "id": "mouth_open_hold",
+        "enabled": True,
         "title": "Boca en O sostenida",
         "action": "Activar o congelar cursor",
         "duration_ms": 700,
@@ -49,6 +53,7 @@ GESTURE_CATALOG = [
     },
     {
         "id": "smile",
+        "enabled": True,
         "title": "Sonrisa",
         "action": "Recentrar cursor",
         "duration_ms": 600,
@@ -61,6 +66,7 @@ GESTURE_CATALOG = [
     },
     {
         "id": "brows_up",
+        "enabled": False,
         "title": "Cejas levantadas",
         "action": "Pausar o reanudar",
         "duration_ms": 700,
@@ -73,6 +79,7 @@ GESTURE_CATALOG = [
     },
     {
         "id": "confirm",
+        "enabled": True,
         "title": "Gesto de confirmacion",
         "action": "Confirmar seleccion actual",
         "duration_ms": 650,
@@ -84,6 +91,19 @@ GESTURE_CATALOG = [
         "recommended_min_windows": 13,
     },
 ]
+
+
+def get_enabled_gesture_catalog() -> list[dict]:
+    return [gesture for gesture in GESTURE_CATALOG if gesture.get("enabled", True)]
+
+
+def is_gesture_enabled(gesture_id: str) -> bool:
+    if gesture_id == "neutral":
+        return True
+    for gesture in GESTURE_CATALOG:
+        if gesture["id"] == gesture_id:
+            return bool(gesture.get("enabled", True))
+    return True
 
 
 NEUTRAL_GESTURE_META = {

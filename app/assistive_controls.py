@@ -8,11 +8,12 @@ import cv2
 import numpy as np
 import pyautogui
 import pyttsx3
-import sounddevice as sd
 from faster_whisper import WhisperModel
+from PySide6.QtCore import QTimer
 from pycaw.pycaw import AudioUtilities
 
 from .action_service import ActionService
+from .audio_utils import AudioLevelMonitor, capture_voice_clip, save_audio_clip
 from .config_store import parse_camera_resolution
 from .gesture_ml import GestureClassifier
 from .heuristic_engine import HeuristicEngine
@@ -20,7 +21,7 @@ from .inference_service import InferenceService
 from .landmark_provider import LandmarkProvider
 from .models import AppState, FaceSample, GesturePrediction
 from .session_logger import SessionLogger
-from .voice_router import resolve_command
+from .voice_router import resolve_command_entry
 
 
 AUDIO_RECORDING_PATH = os.path.join(
@@ -58,9 +59,19 @@ class AssistiveController:
 
         self.audio_endpoint = self._configure_audio()
         self.tts_enabled = bool(profile.get("tts_enabled", False))
-        self.voice_enabled = bool(profile.get("voice_enabled", True))
+        self.voice_commands_enabled = bool(settings.get("voice_commands_enabled", True))
+        self.voice_enabled = bool(profile.get("voice_enabled", True)) and self.voice_commands_enabled
+        self.audio_input_device = settings.get("audio_input_device")
+        self.voice_sample_rate = int(settings.get("voice_sample_rate", 16000))
+        self.voice_record_seconds = float(settings.get("voice_record_seconds", 3.0))
+        self.voice_model_size = str(settings.get("voice_model_size", "small"))
         self.tts = self._configure_tts() if self.tts_enabled else None
-        self.whisper = WhisperModel("base", device="cpu", compute_type="int8") if self.voice_enabled else None
+        self.whisper = WhisperModel(self.voice_model_size, device="cpu", compute_type="int8") if self.voice_enabled else None
+        self.audio_level_monitor = (
+            AudioLevelMonitor(self.voice_sample_rate, device=self.audio_input_device)
+            if self.voice_commands_enabled
+            else None
+        )
         self.action_service = ActionService(
             self.logger,
             on_voice_listener=self._start_voice_listener,
@@ -97,7 +108,10 @@ class AssistiveController:
             except Exception:
                 return False
         try:
-            return self.main_gui_interface.isVisible()
+            if self.main_gui_interface.isVisible():
+                return True
+            compact_window = getattr(self.main_gui_interface, "compact_window", None)
+            return bool(compact_window is not None and compact_window.isVisible())
         except Exception:
             return False
 
@@ -123,6 +137,16 @@ class AssistiveController:
         if self.running:
             return
         self.running = True
+        if self.audio_level_monitor is not None:
+            started = self.audio_level_monitor.start()
+            if not started:
+                snapshot = self.audio_level_monitor.snapshot()
+                self.logger.log(
+                    "voice_audio",
+                    "No se pudo iniciar monitor de microfono",
+                    device=snapshot.get("device_label"),
+                    error=snapshot.get("error", ""),
+                )
         self.logger.log(
             "session",
             "Inicio de sesión",
@@ -141,6 +165,8 @@ class AssistiveController:
             self.control_thread.join(timeout=3)
         if self.cap and self.cap.isOpened():
             self.cap.release()
+        if self.audio_level_monitor is not None:
+            self.audio_level_monitor.stop()
         self.provider.close()
         self.logger.log("session", "Fin de sesión", state=self.state.value)
         try:
@@ -149,11 +175,7 @@ class AssistiveController:
             self.logger.log("error", "No se pudo exportar log Excel", error=str(exc))
 
     def hablar(self, text: str):
-        if self.main_gui_interface:
-            if hasattr(self.main_gui_interface, "signals"):
-                self.main_gui_interface.signals.event_update.emit(text)
-            else:
-                self.main_gui_interface.append_event(text)
+        self._publish_event(text)
         if not self.tts:
             return
         try:
@@ -161,6 +183,13 @@ class AssistiveController:
             self.tts.runAndWait()
         except Exception as exc:
             print(f"Error reproduciendo TTS: {exc}")
+
+    def _publish_event(self, text: str):
+        if self.main_gui_interface:
+            if hasattr(self.main_gui_interface, "signals"):
+                self.main_gui_interface.signals.event_update.emit(text)
+            else:
+                self.main_gui_interface.append_event(text)
 
 
     def toggle_cursor_control(self):
@@ -288,7 +317,10 @@ class AssistiveController:
         self.current_cursor_y = int(np.clip(self.current_cursor_y + control_state.smoothed_dy, 0, self.screen_height - 1))
         pyautogui.moveTo(self.current_cursor_x, self.current_cursor_y, duration=0)
 
-    def _start_voice_listener(self):
+    def start_manual_voice_test(self):
+        self._start_voice_listener(trigger_source="manual")
+
+    def _start_voice_listener(self, trigger_source: str = "gesture"):
         if not self.voice_enabled or self.whisper is None:
             self.last_voice_state = "deshabilitada"
             self._push_status(
@@ -301,11 +333,43 @@ class AssistiveController:
             )
             return
         if self.voice_thread and self.voice_thread.is_alive():
+            self._publish_event("Ya hay una escucha de voz en progreso.")
             return
-        self.voice_thread = threading.Thread(target=self._listen_once, daemon=True)
+        self.voice_thread = threading.Thread(
+            target=self._listen_once,
+            kwargs={"trigger_source": trigger_source},
+            daemon=True,
+        )
         self.voice_thread.start()
 
-    def _listen_once(self):
+    def _get_mic_status_payload(self) -> dict:
+        if self.audio_level_monitor is None:
+            return {
+                "mic_device": "Monitor deshabilitado",
+                "mic_level": 0,
+                "mic_peak": 0,
+                "mic_active_ratio": 0.0,
+                "mic_monitor_status": "deshabilitado",
+                "mic_monitor_error": "",
+            }
+        snapshot = self.audio_level_monitor.snapshot()
+        if not snapshot.get("available"):
+            status = "error" if snapshot.get("error") else "sin señal"
+        elif snapshot.get("suspended"):
+            status = "muestreo en pausa"
+        else:
+            status = "activo"
+        return {
+            "mic_device": snapshot.get("device_label", "Desconocido"),
+            "mic_level": int(snapshot.get("level_percent", 0)),
+            "mic_peak": int(snapshot.get("peak_percent", 0)),
+            "mic_active_ratio": float(snapshot.get("active_ratio", 0.0)),
+            "mic_monitor_status": status,
+            "mic_monitor_error": snapshot.get("error", ""),
+        }
+
+    def _listen_once(self, trigger_source: str = "gesture"):
+        previous_state = self.state
         self.state = AppState.LISTENING
         self.last_voice_state = "escuchando"
         self.last_voice_text = "-"
@@ -319,81 +383,135 @@ class AssistiveController:
             cursor=self._cursor_status_text(),
         )
         self.hablar("Escuchando.")
-        self.logger.log("voice", "Inicio escucha")
+        self.logger.log(
+            "voice",
+            "Inicio escucha",
+            trigger_source=trigger_source,
+            device=self.audio_input_device,
+            duration_s=self.voice_record_seconds,
+            sample_rate=self.voice_sample_rate,
+        )
         try:
-            recording = sd.rec(int(3 * 44100), samplerate=44100, channels=1, dtype="int16")
-            sd.wait()
-            from scipy.io.wavfile import write
-
-            write(AUDIO_RECORDING_PATH, 44100, recording)
-            segments, _ = self.whisper.transcribe(AUDIO_RECORDING_PATH, language="es")
+            if self.audio_level_monitor is not None:
+                self.audio_level_monitor.suspend()
+            recording, audio_diag = capture_voice_clip(
+                self.voice_record_seconds,
+                self.voice_sample_rate,
+                device=self.audio_input_device,
+            )
+            save_audio_clip(AUDIO_RECORDING_PATH, recording, self.voice_sample_rate)
+            self.logger.log("voice_audio", "Audio capturado", **audio_diag)
+            self._publish_event(
+                "Audio capturado | "
+                f"Mic: {audio_diag['device_label']} | "
+                f"RMS: {audio_diag['rms']:.4f} | "
+                f"Pico: {audio_diag['peak']:.4f}"
+            )
+            segments, _ = self.whisper.transcribe(
+                AUDIO_RECORDING_PATH,
+                language="es",
+                vad_filter=True,
+            )
             text = " ".join(segment.text.strip() for segment in segments).strip()
             if not text:
                 self.logger.log("voice", "Sin audio reconocido")
                 self.last_voice_state = "sin audio reconocido"
                 self.last_voice_text = "(sin audio)"
                 self.last_voice_command = "-"
-                self._push_status("No se escuchó un comando.", "-", 0.0, face="estable", mode=self.state.value, cursor=self._cursor_status_text())
+                self._publish_event(
+                    "Voz sin transcripcion reconocible. "
+                    f"Mic: {audio_diag['device_label']} | "
+                    f"RMS: {audio_diag['rms']:.4f}"
+                )
+                self._push_status(
+                    "No se escucho un comando.",
+                    "-",
+                    0.0,
+                    face="estable",
+                    mode=previous_state.value,
+                    cursor=self._cursor_status_text(),
+                    rejection_reason="sin transcripcion",
+                    diagnostic_hint=(
+                        f"Mic: {audio_diag['device_label']} | "
+                        f"RMS: {audio_diag['rms']:.4f} | "
+                        f"Actividad: {audio_diag['active_ratio']:.4f}"
+                    ),
+                )
                 return
-            command_id, confidence = resolve_command(text)
+            command_entry, confidence = resolve_command_entry(text, self.settings)
+            command_id = command_entry["id"] if command_entry else None
             self.last_voice_text = text
-            self.last_voice_command = command_id or "-"
+            self.last_voice_command = command_entry["label"] if command_entry else "-"
+            self._publish_event(f'Texto transcrito: "{text}"')
             self.logger.log(
                 "voice",
                 "Comando transcrito",
                 text=text,
                 command_id=command_id,
+                command_kind=command_entry["kind"] if command_entry else None,
                 confidence=confidence,
                 model_version=self.classifier.active_version,
             )
-            if command_id and confidence >= 0.68:
+            if command_entry and confidence >= 0.68:
                 self.last_voice_state = "comando reconocido"
-                self.action_service.execute_voice_command(command_id, self.state.value)
+                self._publish_event(f"Comando reconocido: {command_entry['label']} ({confidence:.2f})")
+                if command_entry["kind"] == "builtin":
+                    self.action_service.execute_builtin_voice_command(command_id, previous_state.value)
+                else:
+                    self.action_service.execute_custom_voice_command(command_entry, previous_state.value)
                 self._push_status(
-                    f"Comando de voz: {command_id}",
-                    command_id,
+                    f"Comando de voz: {command_entry['label']}",
+                    command_entry["label"],
                     confidence,
                     face="estable",
                     mode=self.state.value,
                     cursor=self._cursor_status_text(),
+                    diagnostic_hint=f"Mic: {audio_diag['device_label']} | ASR: {self.voice_model_size}",
                 )
             else:
                 self.last_voice_state = "comando no reconocido"
+                self._publish_event(f'Comando no reconocido ({confidence:.2f}): "{text}"')
                 self._push_status(
                     "Comando de voz no reconocido.",
                     "-",
                     confidence,
                     face="estable",
-                    mode=self.state.value,
+                    mode=previous_state.value,
                     cursor=self._cursor_status_text(),
                     rejection_reason="voz no reconocida",
-                    diagnostic_hint="El texto se transcribió pero no coincidió con aliases confiables.",
+                    diagnostic_hint="El texto se transcribio pero no coincidió con aliases confiables.",
                 )
         except Exception as exc:
             self.logger.log("error", "Fallo en voz", error=str(exc))
             self.last_voice_state = "error"
             self.last_voice_text = str(exc)
             self.last_voice_command = "-"
+            self._publish_event(f"Error en voz: {exc}")
             self._push_status(
                 f"Error en voz: {exc}",
                 "-",
                 0.0,
                 face="estable",
-                mode=self.state.value,
+                mode=previous_state.value,
                 cursor=self._cursor_status_text(),
                 rejection_reason="error de voz",
                 diagnostic_hint=str(exc),
             )
         finally:
+            if self.audio_level_monitor is not None:
+                self.audio_level_monitor.resume()
             if self.state == AppState.LISTENING:
-                self.state = AppState.READY
+                self.state = previous_state if previous_state != AppState.LISTENING else AppState.READY
             if self.last_voice_state == "escuchando":
                 self.last_voice_state = "en espera"
 
     def _quit_from_action(self):
         self.stop()
         if self.main_gui_interface:
-            self.main_gui_interface.root.after(0, self.main_gui_interface._quit)
+            if hasattr(self.main_gui_interface, "_quit"):
+                QTimer.singleShot(0, self.main_gui_interface._quit)
+            elif hasattr(self.main_gui_interface, "close"):
+                QTimer.singleShot(0, self.main_gui_interface.close)
 
     def _render_overlay(self, frame_rgb, sample, control_state, prediction, compact: bool = False):
         frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
@@ -587,6 +705,7 @@ class AssistiveController:
         rejection_reason=None,
         diagnostic_hint=None,
     ):
+        mic_payload = self._get_mic_status_payload()
         payload = {
             "status_text": status_text,
             "gesture": gesture,
@@ -601,6 +720,7 @@ class AssistiveController:
             "rejection_reason": rejection_reason if rejection_reason is not None else self.last_rejection_reason,
             "diagnostic_hint": diagnostic_hint if diagnostic_hint is not None else self.last_diagnostic_hint,
             "model_version": self.classifier.active_version if self.classifier.active_version is not None else "-",
+            **mic_payload,
         }
         if not self._ui_available():
             return

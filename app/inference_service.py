@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from collections import deque
 
+from .gesture_catalog import is_gesture_enabled
 from .models import AppState, FaceSample, GestureInferenceResult, GesturePrediction
 
 
@@ -70,6 +71,16 @@ class InferenceService:
                 diagnostic_hint="El modelo detecta un estado neutral estable.",
             )
 
+        if not is_gesture_enabled(prediction.gesture_id):
+            return self._reject(
+                prediction,
+                "Gesto deshabilitado",
+                "El gesto detectado está deshabilitado en esta versión.",
+                app_state,
+                cursor_label,
+                should_log=False,
+            )
+
         if prediction.gesture_id == self.latched_gesture:
             return self._reject(
                 prediction,
@@ -82,7 +93,6 @@ class InferenceService:
 
         threshold = float(self.gesture_thresholds.get(prediction.gesture_id, 0.6))
         now = time.monotonic()
-        should_log = False
 
         if not control_state.face_stable:
             return self._reject(
@@ -145,7 +155,7 @@ class InferenceService:
                 should_log=True,
             )
 
-        if app_state == AppState.PAUSED and prediction.gesture_id not in {"brows_up", "mouth_open_hold"}:
+        if app_state == AppState.PAUSED and prediction.gesture_id not in {"both_eyes_closed_intent", "mouth_open_hold"}:
             return self._reject(
                 prediction,
                 "Sistema en pausa",

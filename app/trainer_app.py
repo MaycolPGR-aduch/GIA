@@ -15,11 +15,12 @@ from PySide6.QtWidgets import (
 
 from app.config_store import (
     ensure_app_dirs, load_settings, list_profiles, load_profile,
-    save_profile, build_default_profile, delete_profile
+    save_profile, build_default_profile, delete_profile, save_settings
 )
+from app.audio_utils import list_input_devices
 from app.calibration_service import CalibrationService
 from app.training_service import TrainingService
-from app.gesture_catalog import GESTURE_CATALOG, NEUTRAL_GESTURE_META
+from app.gesture_catalog import NEUTRAL_GESTURE_META, get_enabled_gesture_catalog
 from app.qt_helpers import CameraThread, numpy_to_qimage, MODERN_STYLE
 
 
@@ -66,6 +67,7 @@ class TrainerMainWindow(QMainWindow):
 
         # Cargar lista de perfiles inicial
         self.refresh_profile_list()
+        self.refresh_audio_device_selector()
 
     def create_profiles_tab(self):
         tab = QWidget()
@@ -156,6 +158,13 @@ class TrainerMainWindow(QMainWindow):
         self.check_invert_x = QCheckBox("Invertir Eje X")
         right_layout.addRow(self.check_invert_x)
 
+        self.cb_audio_input = QComboBox()
+        right_layout.addRow("Microfono de voz:", self.cb_audio_input)
+
+        btn_refresh_audio = QPushButton("Actualizar microfonos")
+        btn_refresh_audio.clicked.connect(self.refresh_audio_device_selector)
+        right_layout.addRow(btn_refresh_audio)
+
         btn_save_settings = QPushButton("Guardar Ajustes")
         btn_save_settings.setObjectName("accentButton")
         btn_save_settings.clicked.connect(self.save_quick_settings)
@@ -174,7 +183,7 @@ class TrainerMainWindow(QMainWindow):
         guide_list.addItem(QListWidgetItem(item_text))
 
         # Agregar gestos
-        for gesture in GESTURE_CATALOG:
+        for gesture in get_enabled_gesture_catalog():
             item_text = f"{gesture['title']} - {gesture['training_hint']}\nAcción: {gesture['action']} | Error común: {gesture['common_failure_hint']}"
             guide_list.addItem(QListWidgetItem(item_text))
 
@@ -285,6 +294,7 @@ class TrainerMainWindow(QMainWindow):
         self.spin_smoothing.setValue(self.profile.get("smoothing_factor", 0.62))
         self.check_mirror.setChecked(self.profile.get("mirror_preview", True))
         self.check_invert_x.setChecked(self.profile.get("invert_x", True))
+        self.refresh_audio_device_selector()
 
         # Habilitar pestañas
         self.tabs.setTabEnabled(1, True)
@@ -339,9 +349,28 @@ class TrainerMainWindow(QMainWindow):
         self.profile["smoothing_factor"] = self.spin_smoothing.value()
         self.profile["mirror_preview"] = self.check_mirror.isChecked()
         self.profile["invert_x"] = self.check_invert_x.isChecked()
-        
+
         save_profile(self.profile)
-        QMessageBox.information(self, "Ajustes Guardados", "Los ajustes del perfil se actualizaron.")
+        self.settings["audio_input_device"] = self.cb_audio_input.currentData()
+        save_settings(self.settings)
+        QMessageBox.information(self, "Ajustes Guardados", "Los ajustes del perfil y del audio se actualizaron.")
+
+    def refresh_audio_device_selector(self):
+        selected_device = self.settings.get("audio_input_device")
+        self.cb_audio_input.blockSignals(True)
+        self.cb_audio_input.clear()
+        self.cb_audio_input.addItem("Predeterminado del sistema", None)
+        devices = list_input_devices()
+        selected_index = 0
+        for position, device in enumerate(devices, start=1):
+            self.cb_audio_input.addItem(device["label"], device["id"])
+            if selected_device == device["id"]:
+                selected_index = position
+        if selected_device not in (None, "") and selected_index == 0:
+            self.cb_audio_input.addItem(f"Dispositivo no disponible ({selected_device})", selected_device)
+            selected_index = self.cb_audio_input.count() - 1
+        self.cb_audio_input.setCurrentIndex(selected_index)
+        self.cb_audio_input.blockSignals(False)
 
     # Control de Cámara para Diagnóstico
     def toggle_diag_camera(self):

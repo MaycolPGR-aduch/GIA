@@ -5,6 +5,8 @@ from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 
+from .voice_router import normalize_voice_settings
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = BASE_DIR / "config"
@@ -29,6 +31,13 @@ DEFAULT_SETTINGS = {
     "face_stability_threshold": 0.035,
     "voice_enabled": True,
     "tts_enabled": False,
+    "audio_input_device": None,
+    "voice_sample_rate": 16000,
+    "voice_record_seconds": 3.0,
+    "voice_model_size": "small",
+    "voice_commands_enabled": True,
+    "voice_builtin_alias_overrides": {},
+    "voice_custom_commands": [],
     "high_contrast": False,
     "font_scale": 1.0,
     "gesture_window_size": 12,
@@ -114,17 +123,50 @@ def _write_json(path: Path, payload: dict) -> None:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
 
 
+def _normalize_profile_payload(profile_name: str, payload: dict) -> dict:
+    normalized = deepcopy(DEFAULT_PROFILE)
+    normalized["name"] = profile_name
+    normalized.update(payload)
+    normalized["calibration"] = {
+        **deepcopy(DEFAULT_PROFILE["calibration"]),
+        **normalized.get("calibration", {}),
+    }
+    normalized["gesture_confidence"] = {
+        key: float(value)
+        for key, value in {
+            **deepcopy(DEFAULT_PROFILE["gesture_confidence"]),
+            **normalized.get("gesture_confidence", {}),
+        }.items()
+    }
+    normalized["gesture_duration_ms"] = {
+        key: int(value)
+        for key, value in {
+            **deepcopy(DEFAULT_PROFILE["gesture_duration_ms"]),
+            **normalized.get("gesture_duration_ms", {}),
+        }.items()
+    }
+    normalized["gesture_cooldown_ms"] = {
+        key: int(value)
+        for key, value in {
+            **deepcopy(DEFAULT_PROFILE["gesture_cooldown_ms"]),
+            **normalized.get("gesture_cooldown_ms", {}),
+        }.items()
+    }
+    return normalized
+
+
 def load_settings() -> dict:
     ensure_app_dirs()
     merged = deepcopy(DEFAULT_SETTINGS)
     merged.update(_read_json(SETTINGS_PATH))
+    merged = normalize_voice_settings(merged)
     save_settings(merged)
     return merged
 
 
 def save_settings(settings: dict) -> None:
     ensure_app_dirs()
-    _write_json(SETTINGS_PATH, settings)
+    _write_json(SETTINGS_PATH, normalize_voice_settings(settings))
 
 
 def parse_camera_resolution(value: str | None) -> tuple[int, int]:
@@ -151,27 +193,16 @@ def list_profiles() -> list[str]:
 def load_profile(profile_name: str) -> dict:
     ensure_app_dirs()
     profile_path = PROFILE_DIR / f"{profile_name}.json"
-    profile = deepcopy(DEFAULT_PROFILE)
-    profile["name"] = profile_name
-    profile.update(_read_json(profile_path))
-    profile["calibration"] = {**deepcopy(DEFAULT_PROFILE["calibration"]), **profile.get("calibration", {})}
-    profile["gesture_confidence"] = {
-        key: float(value)
-        for key, value in {**deepcopy(DEFAULT_PROFILE["gesture_confidence"]), **profile.get("gesture_confidence", {})}.items()
-    }
+    profile = _normalize_profile_payload(profile_name, _read_json(profile_path))
     if not profile.get("created_at"):
         profile["created_at"] = datetime.utcnow().isoformat()
-    profile["updated_at"] = datetime.utcnow().isoformat()
-    save_profile(profile)
     return profile
 
 
 def save_profile(profile: dict) -> None:
     ensure_app_dirs()
-    payload = deepcopy(DEFAULT_PROFILE)
-    payload["name"] = profile.get("name", "default")
-    payload.update(profile)
-    payload["calibration"] = {**deepcopy(DEFAULT_PROFILE["calibration"]), **payload.get("calibration", {})}
+    profile_name = profile.get("name", "default")
+    payload = _normalize_profile_payload(profile_name, profile)
     payload["updated_at"] = datetime.utcnow().isoformat()
     if not payload.get("created_at"):
         payload["created_at"] = payload["updated_at"]
