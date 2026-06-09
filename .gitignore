@@ -4,6 +4,4 @@
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
-app.zip
 data/logs/
-data/grabacion.wav
