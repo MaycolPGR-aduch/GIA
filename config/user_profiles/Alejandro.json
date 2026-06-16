@@ -1,7 +1,7 @@
 {
-  "name": "Maycol 2",
-  "created_at": "2026-06-04T22:29:09.113784",
-  "updated_at": "2026-06-11T21:13:03.443607",
+  "name": "Alejandro",
+  "created_at": "2026-06-09T22:32:33.264540",
+  "updated_at": "2026-06-09T22:47:00.186067",
   "launcher_completed": true,
   "neutral_nose": [
     0.0,
@@ -12,7 +12,7 @@
     0.0
   ],
   "neutral_face_scale_px": 1.0,
-  "cursor_sensitivity": 1.05,
+  "cursor_sensitivity": 1.35,
   "dead_zone_px": 8.0,
   "smoothing_factor": 0.62,
   "max_cursor_speed_px": 36,
@@ -21,16 +21,16 @@
   "mirror_preview": true,
   "cursor_starts_active": false,
   "voice_enabled": true,
-  "tts_enabled": true,
+  "tts_enabled": false,
   "gesture_confidence": {
-    "neutral": 0.756,
-    "left_blink_intent": 0.598,
-    "right_blink_intent": 0.502,
-    "both_eyes_closed_intent": 0.711,
-    "mouth_open_hold": 0.779,
-    "smile": 0.594,
-    "brows_up": 0.541,
-    "confirm": 0.9
+    "neutral": 0.341,
+    "left_blink_intent": 0.545,
+    "right_blink_intent": 0.524,
+    "both_eyes_closed_intent": 0.757,
+    "mouth_open_hold": 0.543,
+    "smile": 0.686,
+    "brows_up": 0.3,
+    "confirm": 0.329
   },
   "gesture_duration_ms": {
     "left_blink_intent": 350,
@@ -52,15 +52,15 @@
   },
   "calibration": {
     "completed": true,
-    "last_calibrated_at": "2026-06-11 16:13:03",
+    "last_calibrated_at": "2026-06-09 17:47:00",
     "samples_per_gesture": {
-      "neutral": 261,
-      "left_blink_intent": 298,
-      "right_blink_intent": 89,
-      "both_eyes_closed_intent": 122,
-      "mouth_open_hold": 152,
-      "smile": 210,
-      "confirm": 57
+      "neutral": 152,
+      "left_blink_intent": 79,
+      "right_blink_intent": 82,
+      "both_eyes_closed_intent": 118,
+      "mouth_open_hold": 153,
+      "smile": 88,
+      "confirm": 82
     },
     "gesture_readiness": {
       "neutral": "entrenado",
@@ -73,84 +73,84 @@
     },
     "capture_quality": {
       "neutral": {
-        "captured_frames": 261,
-        "valid_frames": 261,
+        "captured_frames": 152,
+        "valid_frames": 152,
         "invalid_frames": 0,
-        "training_windows": 250,
-        "trained": false,
-        "readiness": "listo para entrenar",
+        "training_windows": 141,
+        "trained": true,
+        "readiness": "entrenado",
         "help_message": "La captura es buena cuando nariz, ojos y boca permanecen estables.",
         "success_message": "La captura es buena cuando nariz, ojos y boca permanecen estables.",
         "blocker": "",
         "last_feedback": "La captura es buena cuando nariz, ojos y boca permanecen estables."
       },
       "left_blink_intent": {
-        "captured_frames": 298,
-        "valid_frames": 298,
+        "captured_frames": 79,
+        "valid_frames": 79,
         "invalid_frames": 0,
-        "training_windows": 287,
-        "trained": false,
-        "readiness": "listo para entrenar",
+        "training_windows": 68,
+        "trained": true,
+        "readiness": "entrenado",
         "help_message": "Se verá listo cuando acumule suficientes ventanas útiles para ML.",
         "success_message": "Se verá listo cuando acumule suficientes ventanas útiles para ML.",
         "blocker": "",
         "last_feedback": "Se verá listo cuando acumule suficientes ventanas útiles para ML."
       },
       "right_blink_intent": {
-        "captured_frames": 89,
-        "valid_frames": 89,
+        "captured_frames": 82,
+        "valid_frames": 82,
         "invalid_frames": 0,
-        "training_windows": 78,
-        "trained": false,
-        "readiness": "listo para entrenar",
+        "training_windows": 71,
+        "trained": true,
+        "readiness": "entrenado",
         "help_message": "Necesita ventanas claras para diferenciarse del parpadeo natural.",
         "success_message": "Necesita ventanas claras para diferenciarse del parpadeo natural.",
         "blocker": "",
         "last_feedback": "Necesita ventanas claras para diferenciarse del parpadeo natural."
       },
       "both_eyes_closed_intent": {
-        "captured_frames": 122,
-        "valid_frames": 122,
+        "captured_frames": 118,
+        "valid_frames": 118,
         "invalid_frames": 0,
-        "training_windows": 111,
-        "trained": false,
-        "readiness": "listo para entrenar",
+        "training_windows": 107,
+        "trained": true,
+        "readiness": "entrenado",
         "help_message": "Debe sentirse como un gesto sostenido, no como un parpadeo largo.",
         "success_message": "Debe sentirse como un gesto sostenido, no como un parpadeo largo.",
         "blocker": "",
         "last_feedback": "Debe sentirse como un gesto sostenido, no como un parpadeo largo."
       },
       "mouth_open_hold": {
-        "captured_frames": 152,
-        "valid_frames": 152,
+        "captured_frames": 153,
+        "valid_frames": 153,
         "invalid_frames": 0,
-        "training_windows": 141,
-        "trained": false,
-        "readiness": "listo para entrenar",
+        "training_windows": 142,
+        "trained": true,
+        "readiness": "entrenado",
         "help_message": "Mientras más estable sea la apertura, mejor separará este gesto de sonrisa y neutral.",
         "success_message": "Mientras más estable sea la apertura, mejor separará este gesto de sonrisa y neutral.",
         "blocker": "",
         "last_feedback": "Mientras más estable sea la apertura, mejor separará este gesto de sonrisa y neutral."
       },
       "smile": {
-        "captured_frames": 210,
-        "valid_frames": 210,
+        "captured_frames": 88,
+        "valid_frames": 88,
         "invalid_frames": 0,
-        "training_windows": 199,
-        "trained": false,
-        "readiness": "listo para entrenar",
+        "training_windows": 77,
+        "trained": true,
+        "readiness": "entrenado",
         "help_message": "La captura es buena cuando la sonrisa se mantiene sin cambios bruscos.",
         "success_message": "La captura es buena cuando la sonrisa se mantiene sin cambios bruscos.",
         "blocker": "",
         "last_feedback": "La captura es buena cuando la sonrisa se mantiene sin cambios bruscos."
       },
       "confirm": {
-        "captured_frames": 67,
-        "valid_frames": 57,
-        "invalid_frames": 10,
-        "training_windows": 46,
-        "trained": false,
-        "readiness": "listo para entrenar",
+        "captured_frames": 82,
+        "valid_frames": 82,
+        "invalid_frames": 0,
+        "training_windows": 71,
+        "trained": true,
+        "readiness": "entrenado",
         "help_message": "Aunque hoy se use poco, conviene entrenarlo con buena consistencia.",
         "success_message": "Aunque hoy se use poco, conviene entrenarlo con buena consistencia.",
         "blocker": "",
@@ -159,14 +159,14 @@
     },
     "pending_retraining": false,
     "last_training_metrics": {
-      "profile": "Maycol 2",
-      "version": 3,
-      "trained_at": "2026-06-11T21:13:03.142855",
+      "profile": "Alejandro",
+      "version": 2,
+      "trained_at": "2026-06-09T22:47:00.048686",
       "window_size": 12,
       "feature_dim": 32,
-      "train_windows": 833,
-      "validation_windows": 279,
-      "training_windows": 1112,
+      "train_windows": 507,
+      "validation_windows": 170,
+      "training_windows": 677,
       "classes": [
         "both_eyes_closed_intent",
         "confirm",
@@ -177,78 +177,78 @@
         "smile"
       ],
       "windows_per_class": {
-        "neutral": 250,
-        "left_blink_intent": 287,
-        "right_blink_intent": 78,
-        "both_eyes_closed_intent": 111,
-        "mouth_open_hold": 141,
-        "smile": 199,
-        "confirm": 46
+        "neutral": 141,
+        "left_blink_intent": 68,
+        "right_blink_intent": 71,
+        "both_eyes_closed_intent": 107,
+        "mouth_open_hold": 142,
+        "smile": 77,
+        "confirm": 71
       },
       "model_type": "LogisticRegression",
-      "model_path": "C:\\GIA 2\\GIA\\data\\calibration\\Maycol 2\\Maycol 2_gesture_model_v3.pkl",
-      "dataset_path": "C:\\GIA 2\\GIA\\data\\calibration\\Maycol 2\\Maycol 2_landmark_dataset_v3.json",
-      "validation_accuracy": 0.982078853046595,
+      "model_path": "C:\\GIA 2\\GIA\\data\\calibration\\Alejandro\\Alejandro_gesture_model_v2.pkl",
+      "dataset_path": "C:\\GIA 2\\GIA\\data\\calibration\\Alejandro\\Alejandro_landmark_dataset_v2.json",
+      "validation_accuracy": 0.9176470588235294,
       "class_metrics": {
         "both_eyes_closed_intent": {
-          "precision": 0.8484848484848485,
-          "recall": 1.0,
-          "f1-score": 0.9180327868852459,
-          "support": 28.0
-        },
-        "confirm": {
           "precision": 1.0,
           "recall": 1.0,
           "f1-score": 1.0,
-          "support": 12.0
+          "support": 27.0
+        },
+        "confirm": {
+          "precision": 0.5769230769230769,
+          "recall": 0.8333333333333334,
+          "f1-score": 0.6818181818181818,
+          "support": 18.0
         },
         "left_blink_intent": {
           "precision": 1.0,
-          "recall": 0.9583333333333334,
-          "f1-score": 0.9787234042553191,
-          "support": 72.0
+          "recall": 1.0,
+          "f1-score": 1.0,
+          "support": 17.0
         },
         "mouth_open_hold": {
           "precision": 1.0,
           "recall": 1.0,
           "f1-score": 1.0,
-          "support": 35.0
+          "support": 36.0
         },
         "neutral": {
-          "precision": 1.0,
-          "recall": 1.0,
-          "f1-score": 1.0,
-          "support": 62.0
+          "precision": 0.8888888888888888,
+          "recall": 0.6857142857142857,
+          "f1-score": 0.7741935483870968,
+          "support": 35.0
         },
         "right_blink_intent": {
           "precision": 1.0,
-          "recall": 0.9,
-          "f1-score": 0.9473684210526315,
-          "support": 20.0
+          "recall": 1.0,
+          "f1-score": 1.0,
+          "support": 18.0
         },
         "smile": {
           "precision": 1.0,
           "recall": 1.0,
           "f1-score": 1.0,
-          "support": 50.0
+          "support": 19.0
         },
-        "accuracy": 0.982078853046595,
+        "accuracy": 0.9176470588235294,
         "macro avg": {
-          "precision": 0.9783549783549784,
-          "recall": 0.979761904761905,
-          "f1-score": 0.9777320874561709,
-          "support": 279.0
+          "precision": 0.9236874236874237,
+          "recall": 0.9312925170068027,
+          "f1-score": 0.9222873900293255,
+          "support": 170.0
         },
         "weighted avg": {
-          "precision": 0.9847941783425654,
-          "recall": 0.982078853046595,
-          "f1-score": 0.9825102923305464,
-          "support": 279.0
+          "precision": 0.9323278029160382,
+          "recall": 0.9176470588235294,
+          "f1-score": 0.919820596860445,
+          "support": 170.0
         }
       },
       "confusion_matrix": [
         [
-          28,
+          27,
           0,
           0,
           0,
@@ -258,17 +258,17 @@
         ],
         [
           0,
-          12,
+          15,
           0,
           0,
-          0,
-          0,
-          0
-        ],
-        [
           3,
           0,
-          69,
+          0
+        ],
+        [
+          0,
+          0,
+          17,
           0,
           0,
           0,
@@ -278,22 +278,22 @@
           0,
           0,
           0,
-          35,
+          36,
           0,
           0,
           0
         ],
         [
           0,
+          11,
           0,
           0,
-          0,
-          62,
+          24,
           0,
           0
         ],
         [
-          2,
+          0,
           0,
           0,
           0,
@@ -308,107 +308,107 @@
           0,
           0,
           0,
-          50
+          19
         ]
       ],
       "recommended_thresholds": {
-        "both_eyes_closed_intent": 0.711,
-        "confirm": 0.9,
-        "left_blink_intent": 0.598,
-        "mouth_open_hold": 0.779,
-        "neutral": 0.756,
-        "right_blink_intent": 0.502,
-        "smile": 0.594
+        "both_eyes_closed_intent": 0.757,
+        "confirm": 0.329,
+        "left_blink_intent": 0.545,
+        "mouth_open_hold": 0.543,
+        "neutral": 0.341,
+        "right_blink_intent": 0.524,
+        "smile": 0.686
       },
       "low_confidence_rejection_rate": {
-        "both_eyes_closed_intent": 0.25,
-        "confirm": 0.083,
-        "left_blink_intent": 0.278,
-        "mouth_open_hold": 0.257,
-        "neutral": 0.258,
-        "right_blink_intent": 0.35,
-        "smile": 0.26
+        "both_eyes_closed_intent": 0.259,
+        "confirm": 0.389,
+        "left_blink_intent": 0.235,
+        "mouth_open_hold": 0.25,
+        "neutral": 0.486,
+        "right_blink_intent": 0.278,
+        "smile": 0.263
       },
       "capture_quality_summary": {
         "neutral": {
-          "captured_frames": 261,
-          "valid_frames": 261,
+          "captured_frames": 152,
+          "valid_frames": 152,
           "invalid_frames": 0,
-          "training_windows": 250,
-          "trained": false,
-          "readiness": "listo para entrenar",
+          "training_windows": 141,
+          "trained": true,
+          "readiness": "entrenado",
           "help_message": "La captura es buena cuando nariz, ojos y boca permanecen estables.",
           "success_message": "La captura es buena cuando nariz, ojos y boca permanecen estables.",
           "blocker": "",
           "last_feedback": "La captura es buena cuando nariz, ojos y boca permanecen estables."
         },
         "left_blink_intent": {
-          "captured_frames": 298,
-          "valid_frames": 298,
+          "captured_frames": 79,
+          "valid_frames": 79,
           "invalid_frames": 0,
-          "training_windows": 287,
-          "trained": false,
-          "readiness": "listo para entrenar",
+          "training_windows": 68,
+          "trained": true,
+          "readiness": "entrenado",
           "help_message": "Se verá listo cuando acumule suficientes ventanas útiles para ML.",
           "success_message": "Se verá listo cuando acumule suficientes ventanas útiles para ML.",
           "blocker": "",
           "last_feedback": "Se verá listo cuando acumule suficientes ventanas útiles para ML."
         },
         "right_blink_intent": {
-          "captured_frames": 89,
-          "valid_frames": 89,
+          "captured_frames": 82,
+          "valid_frames": 82,
           "invalid_frames": 0,
-          "training_windows": 78,
-          "trained": false,
-          "readiness": "listo para entrenar",
+          "training_windows": 71,
+          "trained": true,
+          "readiness": "entrenado",
           "help_message": "Necesita ventanas claras para diferenciarse del parpadeo natural.",
           "success_message": "Necesita ventanas claras para diferenciarse del parpadeo natural.",
           "blocker": "",
           "last_feedback": "Necesita ventanas claras para diferenciarse del parpadeo natural."
         },
         "both_eyes_closed_intent": {
-          "captured_frames": 122,
-          "valid_frames": 122,
+          "captured_frames": 118,
+          "valid_frames": 118,
           "invalid_frames": 0,
-          "training_windows": 111,
-          "trained": false,
-          "readiness": "listo para entrenar",
+          "training_windows": 107,
+          "trained": true,
+          "readiness": "entrenado",
           "help_message": "Debe sentirse como un gesto sostenido, no como un parpadeo largo.",
           "success_message": "Debe sentirse como un gesto sostenido, no como un parpadeo largo.",
           "blocker": "",
           "last_feedback": "Debe sentirse como un gesto sostenido, no como un parpadeo largo."
         },
         "mouth_open_hold": {
-          "captured_frames": 152,
-          "valid_frames": 152,
+          "captured_frames": 153,
+          "valid_frames": 153,
           "invalid_frames": 0,
-          "training_windows": 141,
-          "trained": false,
-          "readiness": "listo para entrenar",
+          "training_windows": 142,
+          "trained": true,
+          "readiness": "entrenado",
           "help_message": "Mientras más estable sea la apertura, mejor separará este gesto de sonrisa y neutral.",
           "success_message": "Mientras más estable sea la apertura, mejor separará este gesto de sonrisa y neutral.",
           "blocker": "",
           "last_feedback": "Mientras más estable sea la apertura, mejor separará este gesto de sonrisa y neutral."
         },
         "smile": {
-          "captured_frames": 210,
-          "valid_frames": 210,
+          "captured_frames": 88,
+          "valid_frames": 88,
           "invalid_frames": 0,
-          "training_windows": 199,
-          "trained": false,
-          "readiness": "listo para entrenar",
+          "training_windows": 77,
+          "trained": true,
+          "readiness": "entrenado",
           "help_message": "La captura es buena cuando la sonrisa se mantiene sin cambios bruscos.",
           "success_message": "La captura es buena cuando la sonrisa se mantiene sin cambios bruscos.",
           "blocker": "",
           "last_feedback": "La captura es buena cuando la sonrisa se mantiene sin cambios bruscos."
         },
         "confirm": {
-          "captured_frames": 67,
-          "valid_frames": 57,
-          "invalid_frames": 10,
-          "training_windows": 46,
-          "trained": false,
-          "readiness": "listo para entrenar",
+          "captured_frames": 82,
+          "valid_frames": 82,
+          "invalid_frames": 0,
+          "training_windows": 71,
+          "trained": true,
+          "readiness": "entrenado",
           "help_message": "Aunque hoy se use poco, conviene entrenarlo con buena consistencia.",
           "success_message": "Aunque hoy se use poco, conviene entrenarlo con buena consistencia.",
           "blocker": "",
@@ -416,13 +416,12 @@
         }
       }
     },
-    "active_model_version": 3,
-    "active_model_path": "C:\\GIA 2\\GIA\\data\\calibration\\Maycol 2\\Maycol 2_gesture_model_v3.pkl",
-    "active_dataset_path": "C:\\GIA 2\\GIA\\data\\calibration\\Maycol 2\\Maycol 2_landmark_dataset_v3.json",
+    "active_model_version": 2,
+    "active_model_path": "C:\\GIA 2\\GIA\\data\\calibration\\Alejandro\\Alejandro_gesture_model_v2.pkl",
+    "active_dataset_path": "C:\\GIA 2\\GIA\\data\\calibration\\Alejandro\\Alejandro_landmark_dataset_v2.json",
     "model_versions": [
       1,
-      2,
-      3
+      2
     ]
   }
 }

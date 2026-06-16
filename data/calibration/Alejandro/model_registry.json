@@ -1,0 +1,62 @@
+{
+  "profile": "Alejandro",
+  "active_version": 2,
+  "versions": [
+    {
+      "version": 1,
+      "trained_at": "2026-06-09T22:46:39.266836",
+      "model_path": "Alejandro_gesture_model_v1.pkl",
+      "dataset_path": "Alejandro_landmark_dataset_v1.json",
+      "classes": [
+        "both_eyes_closed_intent",
+        "confirm",
+        "left_blink_intent",
+        "mouth_open_hold",
+        "neutral",
+        "right_blink_intent",
+        "smile"
+      ],
+      "training_windows": 677,
+      "train_windows": 507,
+      "validation_windows": 170,
+      "validation_accuracy": 0.9176470588235294,
+      "recommended_thresholds": {
+        "both_eyes_closed_intent": 0.757,
+        "confirm": 0.329,
+        "left_blink_intent": 0.545,
+        "mouth_open_hold": 0.543,
+        "neutral": 0.341,
+        "right_blink_intent": 0.524,
+        "smile": 0.686
+      }
+    },
+    {
+      "version": 2,
+      "trained_at": "2026-06-09T22:47:00.048686",
+      "model_path": "Alejandro_gesture_model_v2.pkl",
+      "dataset_path": "Alejandro_landmark_dataset_v2.json",
+      "classes": [
+        "both_eyes_closed_intent",
+        "confirm",
+        "left_blink_intent",
+        "mouth_open_hold",
+        "neutral",
+        "right_blink_intent",
+        "smile"
+      ],
+      "training_windows": 677,
+      "train_windows": 507,
+      "validation_windows": 170,
+      "validation_accuracy": 0.9176470588235294,
+      "recommended_thresholds": {
+        "both_eyes_closed_intent": 0.757,
+        "confirm": 0.329,
+        "left_blink_intent": 0.545,
+        "mouth_open_hold": 0.543,
+        "neutral": 0.341,
+        "right_blink_intent": 0.524,
+        "smile": 0.686
+      }
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "profile": "Diego",
+  "active_version": 1,
+  "versions": [
+    {
+      "version": 1,
+      "trained_at": "2026-06-11T00:05:10.914853",
+      "model_path": "Diego_gesture_model_v1.pkl",
+      "dataset_path": "Diego_landmark_dataset_v1.json",
+      "classes": [
+        "both_eyes_closed_intent",
+        "confirm",
+        "left_blink_intent",
+        "mouth_open_hold",
+        "neutral",
+        "right_blink_intent",
+        "smile"
+      ],
+      "training_windows": 737,
+      "train_windows": 553,
+      "validation_windows": 184,
+      "validation_accuracy": 0.9836956521739131,
+      "recommended_thresholds": {
+        "both_eyes_closed_intent": 0.507,
+        "confirm": 0.351,
+        "left_blink_intent": 0.489,
+        "mouth_open_hold": 0.856,
+        "neutral": 0.4,
+        "right_blink_intent": 0.479,
+        "smile": 0.283
+      }
+    }
+  ]
+}

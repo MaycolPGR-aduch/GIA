@@ -1,6 +1,6 @@
 {
   "profile": "Maycol 2",
-  "active_version": 2,
+  "active_version": 3,
   "versions": [
     {
       "version": 1,
@@ -60,6 +60,34 @@
         "neutral": 0.407,
         "right_blink_intent": 0.449,
         "smile": 0.598
+      }
+    },
+    {
+      "version": 3,
+      "trained_at": "2026-06-11T21:13:03.142855",
+      "model_path": "Maycol 2_gesture_model_v3.pkl",
+      "dataset_path": "Maycol 2_landmark_dataset_v3.json",
+      "classes": [
+        "both_eyes_closed_intent",
+        "confirm",
+        "left_blink_intent",
+        "mouth_open_hold",
+        "neutral",
+        "right_blink_intent",
+        "smile"
+      ],
+      "training_windows": 1112,
+      "train_windows": 833,
+      "validation_windows": 279,
+      "validation_accuracy": 0.982078853046595,
+      "recommended_thresholds": {
+        "both_eyes_closed_intent": 0.711,
+        "confirm": 0.9,
+        "left_blink_intent": 0.598,
+        "mouth_open_hold": 0.779,
+        "neutral": 0.756,
+        "right_blink_intent": 0.502,
+        "smile": 0.594
       }
     }
   ]
