@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import queue
 import threading
 import time
 from pathlib import Path
@@ -89,24 +90,140 @@ def analyze_audio(audio: np.ndarray, sample_rate: int, *, device_label: str) -> 
     }
 
 
-def capture_voice_clip(duration_s: float, sample_rate: int, *, device=None) -> tuple[np.ndarray, dict]:
-    sample_count = max(1, int(duration_s * sample_rate))
+class SilenceEndpointer:
+    """Decide cuándo cortar una captura de voz. Puro y sin I/O: se alimenta
+    con bloques mono float32 y devuelve el motivo de corte o None (seguir).
+
+    Motivos de corte:
+    - "silence": hubo voz y luego silencio sostenido (fin de habla).
+    - "start_timeout": nunca se detectó voz dentro del tiempo de arranque.
+    - "max_duration": se alcanzó la duración máxima permitida.
+    """
+
+    NOISE_CALIBRATION_BLOCKS = 3
+    NOISE_RMS_CAP = 0.05
+
+    def __init__(
+        self,
+        sample_rate: int,
+        *,
+        silence_duration_s: float = 0.8,
+        min_duration_s: float = 1.0,
+        max_duration_s: float = 6.0,
+        start_timeout_s: float = 2.5,
+        base_rms_threshold: float = 0.012,
+    ):
+        self.sample_rate = int(sample_rate)
+        self.silence_duration_s = float(silence_duration_s)
+        self.min_duration_s = float(min_duration_s)
+        self.max_duration_s = float(max_duration_s)
+        self.start_timeout_s = float(start_timeout_s)
+        self.base_rms_threshold = float(base_rms_threshold)
+        self.speech_detected = False
+        self.elapsed_s = 0.0
+        self._silence_s = 0.0
+        self._noise_rms: list[float] = []
+
+    def _voice_threshold(self) -> float:
+        if not self._noise_rms:
+            return self.base_rms_threshold
+        noise_floor = float(np.median(self._noise_rms))
+        return max(self.base_rms_threshold, noise_floor * 3.0)
+
+    def feed(self, block: np.ndarray) -> str | None:
+        mono = np.asarray(block, dtype=np.float32).reshape(-1)
+        if mono.size == 0:
+            return None
+        block_s = mono.size / float(self.sample_rate)
+        rms = float(np.sqrt(np.mean(np.square(mono.astype(np.float64)))))
+
+        if len(self._noise_rms) < self.NOISE_CALIBRATION_BLOCKS:
+            # El piso de ruido se estima con los primeros bloques; se acota
+            # para que hablar de inmediato no infle el umbral.
+            self._noise_rms.append(min(rms, self.NOISE_RMS_CAP))
+
+        self.elapsed_s += block_s
+        if rms >= self._voice_threshold():
+            self.speech_detected = True
+            self._silence_s = 0.0
+        elif self.speech_detected:
+            self._silence_s += block_s
+
+        # Épsilon para que la acumulación en flotante de bloques (p. ej. 8 x 0.1 s)
+        # alcance los umbrales exactos.
+        epsilon = 1e-6
+        if self.elapsed_s + epsilon >= self.max_duration_s:
+            return "max_duration"
+        if not self.speech_detected and self.elapsed_s + epsilon >= self.start_timeout_s:
+            return "start_timeout"
+        if (
+            self.speech_detected
+            and self.elapsed_s + epsilon >= self.min_duration_s
+            and self._silence_s + epsilon >= self.silence_duration_s
+        ):
+            return "silence"
+        return None
+
+
+def capture_voice_clip_until_silence(
+    sample_rate: int,
+    *,
+    device=None,
+    max_duration_s: float = 6.0,
+    min_duration_s: float = 1.0,
+    silence_duration_s: float = 0.8,
+    block_duration_s: float = 0.1,
+) -> tuple[np.ndarray, dict]:
+    """Graba desde el micrófono hasta detectar fin de habla (o timeouts)."""
     resolved_device = resolve_input_device(device)
-    recording = sd.rec(
-        sample_count,
+    endpointer = SilenceEndpointer(
+        sample_rate,
+        silence_duration_s=silence_duration_s,
+        min_duration_s=min_duration_s,
+        max_duration_s=max_duration_s,
+    )
+    block_queue: queue.Queue = queue.Queue()
+    blocks: list[np.ndarray] = []
+    blocksize = max(256, int(sample_rate * block_duration_s))
+
+    def _callback(indata, frames, time_info, status):
+        block_queue.put(indata.copy())
+
+    stopped_reason = "max_duration"
+    stream = sd.InputStream(
         samplerate=int(sample_rate),
         channels=1,
         dtype="float32",
         device=resolved_device,
+        blocksize=blocksize,
+        callback=_callback,
     )
-    sd.wait()
-    mono = np.asarray(recording, dtype=np.float32).reshape(-1)
+    with stream:
+        stall_deadline = time.monotonic() + max_duration_s + 2.0
+        while True:
+            try:
+                block = block_queue.get(timeout=0.5)
+            except queue.Empty:
+                if time.monotonic() >= stall_deadline:
+                    stopped_reason = "stream_stalled"
+                    break
+                continue
+            mono = np.asarray(block, dtype=np.float32).reshape(-1)
+            blocks.append(mono)
+            reason = endpointer.feed(mono)
+            if reason:
+                stopped_reason = reason
+                break
+
+    recording = np.concatenate(blocks) if blocks else np.zeros(1, dtype=np.float32)
     diagnostics = analyze_audio(
-        mono,
+        recording,
         int(sample_rate),
         device_label=describe_input_device(resolved_device),
     )
-    return mono, diagnostics
+    diagnostics["stopped_reason"] = stopped_reason
+    diagnostics["speech_detected"] = endpointer.speech_detected
+    return recording, diagnostics
 
 
 def prepare_audio_for_asr(audio: np.ndarray) -> np.ndarray:

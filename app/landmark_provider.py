@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -45,7 +46,7 @@ NOSE_IDX = 1
 
 @dataclass(slots=True)
 class DetectionSnapshot:
-    frame_rgb: np.ndarray
+    frame_bgr: np.ndarray
     face_sample: FaceSample | None
 
 
@@ -53,6 +54,7 @@ class LandmarkProvider:
     def __init__(self, fps: int = 15):
         self.fps = fps
         self.timestamp_ms = 0
+        self._clock_start = time.perf_counter()
         base_options = mp.tasks.BaseOptions(model_asset_path=str(FACE_LANDMARKER_MODEL_PATH))
         options = mp.tasks.vision.FaceLandmarkerOptions(
             base_options=base_options,
@@ -70,10 +72,13 @@ class LandmarkProvider:
     def process(self, frame_bgr: np.ndarray) -> DetectionSnapshot:
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-        self.timestamp_ms += max(1, int(1000 / max(self.fps, 1)))
+        # Reloj real: MediaPipe (modo VIDEO) usa estos timestamps para el
+        # tracking temporal y exige monotonicidad estricta.
+        elapsed_ms = int((time.perf_counter() - self._clock_start) * 1000)
+        self.timestamp_ms = max(self.timestamp_ms + 1, elapsed_ms)
         result = self.landmarker.detect_for_video(mp_image, self.timestamp_ms)
         if not result.face_landmarks:
-            return DetectionSnapshot(frame_rgb=frame_rgb, face_sample=None)
+            return DetectionSnapshot(frame_bgr=frame_bgr, face_sample=None)
 
         landmarks = result.face_landmarks[0]
         height, width = frame_bgr.shape[:2]
@@ -116,7 +121,7 @@ class LandmarkProvider:
             face_scale_px=face_width_px,
             face_center_px=center,
         )
-        return DetectionSnapshot(frame_rgb=frame_rgb, face_sample=sample)
+        return DetectionSnapshot(frame_bgr=frame_bgr, face_sample=sample)
 
     def _aspect_ratio(self, indices: Iterable[int], points_px: dict[int, tuple[int, int]]) -> float:
         p1, p2, p3, p4, p5, p6 = [points_px[idx] for idx in indices]

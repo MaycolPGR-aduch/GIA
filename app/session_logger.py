@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -18,7 +18,7 @@ class SessionLogger:
 
     def log(self, event_type: str, detail: str, **payload) -> None:
         event = SessionEvent(
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             event_type=event_type,
             detail=detail,
             payload=payload,

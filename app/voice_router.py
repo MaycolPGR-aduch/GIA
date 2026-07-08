@@ -151,6 +151,25 @@ DEFAULT_VOICE_SETTINGS = {
     "voice_custom_commands": [],
 }
 
+# Palabras que indican negación o cancelación: si aparecen en la transcripción,
+# el comando NO debe dispararse ("no quiero cerrar sistema" no debe cerrar).
+NEGATION_TOKENS = {
+    "no",
+    "nunca",
+    "jamas",
+    "cancela",
+    "cancelar",
+    "deten",
+    "detente",
+    "olvida",
+    "olvidalo",
+}
+
+# Un alias solo recibe el boost de coincidencia exacta si cubre al menos esta
+# fracción de las palabras de la transcripción (evita disparos dentro de
+# frases largas no dirigidas al sistema).
+MIN_ALIAS_WORD_COVERAGE = 0.5
+
 MACRO_KEY_ALIASES = {
     "control": "ctrl",
     "ctl": "ctrl",
@@ -379,16 +398,29 @@ def find_phrase_conflicts(
     return sorted(set(conflicts))
 
 
+def _alias_match_score(normalized_text: str, alias_norm: str) -> float:
+    if not alias_norm or not normalized_text:
+        return 0.0
+    if normalized_text == alias_norm:
+        return 1.0
+    score = SequenceMatcher(None, normalized_text, alias_norm).ratio()
+    text_words = normalized_text.split()
+    if NEGATION_TOKENS & set(text_words):
+        return min(score, 0.30)
+    if re.search(rf"(?:^|\s){re.escape(alias_norm)}(?:\s|$)", normalized_text):
+        coverage = len(alias_norm.split()) / max(len(text_words), 1)
+        if coverage >= MIN_ALIAS_WORD_COVERAGE:
+            return max(score, 0.95)
+    return score
+
+
 def resolve_command_entry(text: str, settings: dict | None = None) -> tuple[dict | None, float]:
     normalized = normalize_text(text)
     best_entry = None
     best_score = 0.0
     for entry in get_active_command_entries(settings):
         for alias in entry.get("spoken_phrases", []):
-            alias_norm = normalize_text(alias)
-            score = SequenceMatcher(None, normalized, alias_norm).ratio()
-            if alias_norm and alias_norm in normalized:
-                score = max(score, 0.95)
+            score = _alias_match_score(normalized, normalize_text(alias))
             if score > best_score:
                 best_entry = entry
                 best_score = score

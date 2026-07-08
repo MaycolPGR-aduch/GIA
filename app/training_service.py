@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from .gesture_ml import GestureClassifier
+from .gesture_ml import GestureClassifier, LegacyModelError
 
 
 class TrainingService:
@@ -10,9 +10,15 @@ class TrainingService:
         self.profile_name = profile_name
         self.window_size = window_size
         self.classifier = GestureClassifier(profile_name, window_size=window_size)
+        self.load_error: str | None = None
 
     def load_classifier(self) -> bool:
-        return self.classifier.load()
+        self.load_error = None
+        try:
+            return self.classifier.load()
+        except LegacyModelError as exc:
+            self.load_error = str(exc)
+            return False
 
     def load_active_dataset(self) -> dict:
         return self.classifier.load_active_dataset()
@@ -30,7 +36,7 @@ class TrainingService:
             "samples_by_gesture": serialize_samples_by_gesture(samples_by_gesture),
             "capture_quality": capture_quality
         }
-        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
     def load_pending_samples(self) -> tuple[dict, dict] | None:
         from .config_store import profile_calibration_dir

@@ -9,7 +9,7 @@ from app.landmark_provider import LandmarkProvider
 
 
 class CameraThread(QThread):
-    # Emite (frame_rgb, face_sample)
+    # Emite (frame_bgr, face_sample)
     frame_processed = Signal(object, object)
     camera_error = Signal(str)
 
@@ -45,7 +45,7 @@ class CameraThread(QThread):
                     continue
 
                 snapshot = provider.process(frame_bgr)
-                self.frame_processed.emit(snapshot.frame_rgb, snapshot.face_sample)
+                self.frame_processed.emit(snapshot.frame_bgr, snapshot.face_sample)
 
                 elapsed = time.monotonic() - start_time
                 if elapsed < frame_delay:

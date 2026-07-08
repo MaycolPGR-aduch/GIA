@@ -249,7 +249,7 @@ class TrainerMainWindow(QMainWindow):
         self.txt_train_status.setWordWrap(True)
         layout.addWidget(self.txt_train_status)
 
-        self.btn_train = QPushButton("Entrenar Modelo Híbrido (GRU + Regresión Logística)")
+        self.btn_train = QPushButton("Entrenar Modelo (selección automática de extractor)")
         self.btn_train.setObjectName("accentButton")
         self.btn_train.clicked.connect(self.run_training)
         layout.addWidget(self.btn_train)
@@ -280,6 +280,8 @@ class TrainerMainWindow(QMainWindow):
 
         # Cargar dataset si existe
         self.training_service.load_classifier()
+        if self.training_service.load_error:
+            QMessageBox.warning(self, "Modelo incompatible", self.training_service.load_error)
         pending = self.training_service.load_pending_samples()
         if pending is not None:
             samples, quality = pending
@@ -397,9 +399,9 @@ class TrainerMainWindow(QMainWindow):
         self.btn_toggle_diag_cam.setText("Iniciar Prueba de Cámara")
 
     @Slot(object, object)
-    def on_diag_frame(self, frame_rgb, face_sample):
+    def on_diag_frame(self, frame_bgr, face_sample):
         # Dibujar landmarks básicos de diagnóstico
-        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        frame_bgr = frame_bgr.copy()
         if face_sample is not None:
             for pt in face_sample.points_px.values():
                 cv2.circle(frame_bgr, pt, 1, (60, 255, 80), -1)
@@ -503,22 +505,22 @@ class TrainerMainWindow(QMainWindow):
             self.btn_capture.setEnabled(True)
 
     @Slot(object, object)
-    def on_calibration_frame(self, frame_rgb, face_sample):
+    def on_calibration_frame(self, frame_bgr, face_sample):
         # Renderiza el feed con espejo
-        frame_render = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        frame_render = frame_bgr.copy()
         if self.profile.get("mirror_preview", True):
             frame_render = cv2.flip(frame_render, 1)
         qimg = numpy_to_qimage(cv2.cvtColor(frame_render, cv2.COLOR_BGR2RGB))
         self.calib_cam_label.setPixmap(QPixmap.fromImage(qimg).scaled(480, 360, Qt.KeepAspectRatio))
 
     @Slot(object, object)
-    def on_capture_sample_frame(self, frame_rgb, face_sample):
+    def on_capture_sample_frame(self, frame_bgr, face_sample):
         # Registrar muestra
         is_registered, feedback = self.calibration_service.register_sample(self.capture_gesture_id, face_sample)
-        
+
         # Renderizar en UI
-        frame_render = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-        
+        frame_render = frame_bgr.copy()
+
         # Mostrar retroalimentación de MediaPipe
         if face_sample is not None:
             for pt in face_sample.points_px.values():
@@ -615,7 +617,7 @@ class TrainerMainWindow(QMainWindow):
             return
 
         self.btn_train.setEnabled(False)
-        self.txt_train_status.setText("Entrenando clasificador GRU local...")
+        self.txt_train_status.setText("Entrenando y comparando extractores de features...")
         QApplication.processEvents()
 
         try:
@@ -635,27 +637,42 @@ class TrainerMainWindow(QMainWindow):
             # Mostrar resultados de entrenamiento
             summary = classifier.training_summary
             report = summary.get("class_metrics", {})
-            
+            accuracy = summary.get("validation_accuracy")
+            accuracy_text = f"{accuracy:.2%}" if accuracy is not None else "N/D (sin ventanas de validación)"
+
             results_text = (
                 f"<b>Modelo entrenado con éxito (Versión {summary['version']})</b><br/>"
                 f"Fecha: {summary['trained_at']}<br/>"
                 f"Muestras totales: {summary['training_windows']} ventanas útiles.<br/>"
-                f"Precisión de validación: <b>{summary['validation_accuracy']:.2%}</b><br/><br/>"
-                f"<b>Métricas por clase:</b><br/>"
+                f"Precisión de validación: <b>{accuracy_text}</b><br/><br/>"
             )
+
+            selection = summary.get("extractor_selection", {})
+            if selection:
+                results_text += "<b>Comparación de extractores (mismo split temporal con gap):</b><br/>"
+                for name, candidate in selection.get("candidates", {}).items():
+                    candidate_accuracy = candidate.get("validation_accuracy")
+                    candidate_text = f"{candidate_accuracy:.2%}" if candidate_accuracy is not None else "N/D"
+                    marker = " &larr; <b>seleccionado</b>" if name == selection.get("selected") else ""
+                    results_text += (
+                        f"- {name}: precisión={candidate_text} | dims={candidate.get('feature_dim', '-')}{marker}<br/>"
+                    )
+                results_text += "<br/>"
+
+            results_text += "<b>Métricas por clase:</b><br/>"
             for gesture_id in summary["classes"]:
                 class_info = report.get(gesture_id, {})
                 f1 = class_info.get("f1-score", 0.0)
                 rec = class_info.get("recall", 0.0)
                 results_text += f"- <b>{gesture_id}</b>: F1={f1:.2f} | Recall={rec:.2f}<br/>"
-                
+
             self.txt_train_results.setText(results_text)
             self.txt_train_status.setText("Modelo listo para interactuar en runtime.")
             self.refresh_gestures_list_widget()
-            
+
             QMessageBox.information(
                 self, "Entrenamiento Completado",
-                f"El modelo de gestos se entrenó con una precisión de {summary['validation_accuracy']:.1%}."
+                f"El modelo de gestos se entrenó con una precisión de validación de {accuracy_text}."
             )
         except Exception as exc:
             self.txt_train_status.setText(f"Error en entrenamiento: {exc}")

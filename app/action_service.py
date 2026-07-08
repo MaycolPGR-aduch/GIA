@@ -103,9 +103,7 @@ class ActionService:
             self._execute_macro("Modo dictado", ["win", "h"])
 
     def _invoke_ui(self, callback):
-        if hasattr(self.main_gui_interface, "root"):
-            self.main_gui_interface.root.after(0, callback)
-        elif hasattr(self.main_gui_interface, "run_on_ui_thread"):
+        if hasattr(self.main_gui_interface, "run_on_ui_thread"):
             self.main_gui_interface.run_on_ui_thread(callback)
         else:
             from PySide6.QtCore import QTimer

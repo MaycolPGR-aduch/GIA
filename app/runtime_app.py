@@ -311,7 +311,7 @@ class RuntimeMainWindow(QMainWindow):
 
     def update_video_feed(self, frame_rgb, compact_frame_rgb=None):
         try:
-            if not self.is_compact_mode:
+            if frame_rgb is not None and not self.is_compact_mode:
                 image = numpy_to_qimage(frame_rgb)
                 pix = QPixmap.fromImage(image)
                 scaled = pix.scaled(self.video_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -341,7 +341,11 @@ class RuntimeMainWindow(QMainWindow):
         self.lbl_face.setText(f"Rostro: {self._display_text(payload.get('face', '-'))}")
         self.lbl_mode.setText(f"Modo: {self._display_text(payload.get('mode', '-'))}")
         self.lbl_cursor.setText(f"Cursor: {self._display_text(payload.get('cursor', '-'))}")
-        self.lbl_voice_state.setText(f"Voz: {self._display_text(payload.get('voice_state', 'en espera'))}")
+        voice_state = self._display_text(payload.get('voice_state', 'en espera'))
+        voice_engine = payload.get('voice_engine')
+        if voice_engine and voice_engine != 'listo':
+            voice_state += f" (motor: {self._display_text(voice_engine)})"
+        self.lbl_voice_state.setText(f"Voz: {voice_state}")
         self.lbl_voice_text.setText(f"Texto: {self._display_text(payload.get('voice_text', '-'))}")
         self.lbl_voice_cmd.setText(f"Comando: {self._display_text(payload.get('voice_command', '-'))}")
         mic_status = self._display_text(payload.get("mic_monitor_status", "sin datos"))
@@ -416,13 +420,7 @@ class RuntimeMainWindow(QMainWindow):
 
     @staticmethod
     def _display_text(value) -> str:
-        text = "" if value is None else str(value)
-        if any(marker in text for marker in ("\u00c3", "\u00c2", "\u00e2")):
-            try:
-                text = text.encode("latin-1").decode("utf-8")
-            except (UnicodeEncodeError, UnicodeDecodeError):
-                pass
-        return text
+        return "" if value is None else str(value)
 
     def _add_help_label(self, layout: QVBoxLayout, text: str, object_name: str, rich_text: bool = False):
         label = QLabel(text)
@@ -588,23 +586,27 @@ QLabel#helpBody {
     def enter_compact_mode(self):
         if self.is_compact_mode:
             return
-        
+
         self.hide()
         self.compact_window = CompactWindow(self)
         self.compact_window.show()
         self.is_compact_mode = True
+        if self.controller and hasattr(self.controller, "set_compact_mode"):
+            self.controller.set_compact_mode(True)
         self.append_event("Cambiado a modo compacto.")
 
     def exit_compact_mode(self):
         if not self.is_compact_mode:
             return
-        
+
         if self.compact_window:
             self.compact_window.close()
             self.compact_window = None
-            
+
         self.show()
         self.is_compact_mode = False
+        if self.controller and hasattr(self.controller, "set_compact_mode"):
+            self.controller.set_compact_mode(False)
         self.append_event("Restaurada ventana completa.")
 
     def _toggle_pause(self):

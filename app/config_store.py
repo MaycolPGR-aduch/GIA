@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .voice_router import normalize_voice_settings
@@ -33,7 +33,10 @@ DEFAULT_SETTINGS = {
     "tts_enabled": False,
     "audio_input_device": None,
     "voice_sample_rate": 16000,
-    "voice_record_seconds": 3.0,
+    "voice_max_record_seconds": 6.0,
+    "voice_min_record_seconds": 1.0,
+    "voice_silence_seconds": 0.8,
+    "voice_debug_save_clip": False,
     "voice_model_size": "small",
     "voice_commands_enabled": True,
     "voice_builtin_alias_overrides": {},
@@ -88,6 +91,15 @@ DEFAULT_PROFILE = {
         "smile": 1800,
         "brows_up": 1500,
         "confirm": 1500,
+    },
+    "heuristic_thresholds": {
+        "hybrid_eye_closed_confidence_floor": 0.18,
+        "hybrid_eye_closed_ratio_max": 0.19,
+        "hybrid_eye_closed_asymmetry_max": 0.08,
+        "blink_closed_ratio": 0.17,
+        "blink_open_ratio": 0.20,
+        "blink_asymmetry_min": 0.04,
+        "blink_confidence": 0.72,
     },
     "calibration": {
         "completed": False,
@@ -152,6 +164,13 @@ def _normalize_profile_payload(profile_name: str, payload: dict) -> dict:
             **normalized.get("gesture_cooldown_ms", {}),
         }.items()
     }
+    normalized["heuristic_thresholds"] = {
+        key: float(value)
+        for key, value in {
+            **deepcopy(DEFAULT_PROFILE["heuristic_thresholds"]),
+            **normalized.get("heuristic_thresholds", {}),
+        }.items()
+    }
     return normalized
 
 
@@ -159,9 +178,7 @@ def load_settings() -> dict:
     ensure_app_dirs()
     merged = deepcopy(DEFAULT_SETTINGS)
     merged.update(_read_json(SETTINGS_PATH))
-    merged = normalize_voice_settings(merged)
-    save_settings(merged)
-    return merged
+    return normalize_voice_settings(merged)
 
 
 def save_settings(settings: dict) -> None:
@@ -195,7 +212,7 @@ def load_profile(profile_name: str) -> dict:
     profile_path = PROFILE_DIR / f"{profile_name}.json"
     profile = _normalize_profile_payload(profile_name, _read_json(profile_path))
     if not profile.get("created_at"):
-        profile["created_at"] = datetime.utcnow().isoformat()
+        profile["created_at"] = datetime.now(timezone.utc).isoformat()
     return profile
 
 
@@ -203,7 +220,7 @@ def save_profile(profile: dict) -> None:
     ensure_app_dirs()
     profile_name = profile.get("name", "default")
     payload = _normalize_profile_payload(profile_name, profile)
-    payload["updated_at"] = datetime.utcnow().isoformat()
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
     if not payload.get("created_at"):
         payload["created_at"] = payload["updated_at"]
     _write_json(PROFILE_DIR / f"{payload['name']}.json", payload)
@@ -212,7 +229,7 @@ def save_profile(profile: dict) -> None:
 def build_default_profile(profile_name: str) -> dict:
     profile = deepcopy(DEFAULT_PROFILE)
     profile["name"] = profile_name
-    profile["created_at"] = datetime.utcnow().isoformat()
+    profile["created_at"] = datetime.now(timezone.utc).isoformat()
     profile["updated_at"] = profile["created_at"]
     return profile
 
@@ -252,21 +269,13 @@ def versioned_model_path(profile_name: str, version: int) -> Path:
 
 
 def versioned_dataset_path(profile_name: str, version: int) -> Path:
-    return profile_calibration_dir(profile_name) / f"{profile_name}_landmark_dataset_v{version}.json"
+    return profile_calibration_dir(profile_name) / f"{profile_name}_landmark_dataset_v{version}.json.gz"
 
 
 def active_dataset_summary_path(profile_name: str) -> Path:
     return profile_calibration_dir(profile_name) / f"{profile_name}_dataset_summary.json"
 
 
-def legacy_model_path(profile_name: str) -> Path:
-    return CALIBRATION_DIR / f"{profile_name}_gesture_model.pkl"
-
-
-def legacy_dataset_summary_path(profile_name: str) -> Path:
-    return CALIBRATION_DIR / f"{profile_name}_samples.json"
-
-
 def session_log_path(profile_name: str) -> Path:
-    stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     return LOG_DIR / f"{profile_name}_{stamp}.jsonl"

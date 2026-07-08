@@ -1,6 +1,5 @@
 absl-py==2.4.0
 comtypes==1.4.16
-customtkinter==5.2.2
 faster-whisper==1.2.1
 joblib==1.5.3
 mediapipe==0.10.35

@@ -56,6 +56,8 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(profile["name"], "tester")
         self.assertIn("gesture_confidence", profile)
         self.assertIn("calibration", profile)
+        self.assertIn("heuristic_thresholds", profile)
+        self.assertIn("blink_closed_ratio", profile["heuristic_thresholds"])
 
     def test_settings_load(self):
         settings = load_settings()
@@ -63,7 +65,10 @@ class CoreTests(unittest.TestCase):
         self.assertIn("gesture_window_size", settings)
         self.assertIn("audio_input_device", settings)
         self.assertIn("voice_sample_rate", settings)
-        self.assertIn("voice_record_seconds", settings)
+        self.assertIn("voice_max_record_seconds", settings)
+        self.assertIn("voice_min_record_seconds", settings)
+        self.assertIn("voice_silence_seconds", settings)
+        self.assertIn("voice_debug_save_clip", settings)
         self.assertIn("voice_model_size", settings)
         self.assertIn("voice_commands_enabled", settings)
         self.assertIn("voice_builtin_alias_overrides", settings)
@@ -227,11 +232,17 @@ class CoreTests(unittest.TestCase):
             classifier.fit(samples, capture_quality_summary={"neutral": {"valid_frames": 8}})
             self.assertEqual(classifier.active_version, 1)
             self.assertTrue(classifier.model_path.exists())
+            self.assertTrue(str(classifier.active_dataset_path).endswith(".json.gz"))
             loaded_samples = classifier.load_active_dataset()
             self.assertIn("neutral", loaded_samples)
             self.assertEqual(len(loaded_samples["neutral"]), 8)
             self.assertIn("recommended_thresholds", classifier.training_summary)
             self.assertIn("class_metrics", classifier.training_summary)
+            self.assertIn("extractor_selection", classifier.training_summary)
+            selection = classifier.training_summary["extractor_selection"]
+            self.assertIn("gru_random", selection["candidates"])
+            self.assertIn("stats_v1", selection["candidates"])
+            self.assertEqual(classifier.extractor.name, selection["selected"])
 
             classifier.fit(samples)
             self.assertEqual(classifier.active_version, 2)
@@ -379,17 +390,25 @@ class CoreTests(unittest.TestCase):
         self.assertFalse(should_use)
 
     def test_voice_listener_uses_previous_state_for_resume_command(self):
+        import threading
+
         controller = AssistiveController.__new__(AssistiveController)
         controller.state = AppState.PAUSED
+        controller._state_lock = threading.Lock()
+        controller._pending_quit_deadline = 0.0
         controller.last_voice_state = "-"
         controller.last_voice_text = "-"
         controller.last_voice_command = "-"
         controller.settings = {}
-        controller.voice_record_seconds = 1.0
         controller.voice_sample_rate = 16000
+        controller.voice_max_record_seconds = 6.0
+        controller.voice_min_record_seconds = 1.0
+        controller.voice_silence_seconds = 0.8
+        controller.voice_debug_save_clip = False
         controller.audio_input_device = None
         controller.audio_level_monitor = None
         controller.voice_model_size = "small"
+        controller.whisper_state = "listo"
         controller._cursor_status_text = lambda: "congelado"
         controller._push_status = lambda *args, **kwargs: None
         controller._publish_event = lambda text: None
@@ -415,9 +434,9 @@ class CoreTests(unittest.TestCase):
             {"transcribe": lambda self, *args, **kwargs: ([type("Segment", (), {"text": "reanudar sistema"})()], None)},
         )()
 
-        original_capture = assistive_controls_module.capture_voice_clip
+        original_capture = assistive_controls_module.capture_voice_clip_until_silence
         original_save = assistive_controls_module.save_audio_clip
-        assistive_controls_module.capture_voice_clip = lambda *args, **kwargs: (
+        assistive_controls_module.capture_voice_clip_until_silence = lambda *args, **kwargs: (
             np.zeros(16000, dtype=np.float32),
             {
                 "device_label": "Predeterminado del sistema",
@@ -427,13 +446,15 @@ class CoreTests(unittest.TestCase):
                 "peak": 0.40,
                 "active_ratio": 0.30,
                 "clip_ratio": 0.0,
+                "stopped_reason": "silence",
+                "speech_detected": True,
             },
         )
         assistive_controls_module.save_audio_clip = lambda *args, **kwargs: None
         try:
             controller._listen_once(trigger_source="manual")
         finally:
-            assistive_controls_module.capture_voice_clip = original_capture
+            assistive_controls_module.capture_voice_clip_until_silence = original_capture
             assistive_controls_module.save_audio_clip = original_save
 
         self.assertEqual(executed, [("resume", "paused")])
