@@ -390,6 +390,20 @@ class GestureClassifier:
             }
         )
 
+        # Guarda automaticamente la figura de matriz de confusion junto al modelo.
+        # Envuelto en try/except: un fallo al graficar nunca debe romper el entrenamiento.
+        if confusion:
+            try:
+                from .confusion_plot import render_from_training_summary
+
+                render_from_training_summary(
+                    self.training_summary,
+                    self.profile_dir / f"{self.profile_name}_confusion_matrix_v{next_version}.png",
+                    title=f"Gesture confusion matrix - {self.profile_name} (v{next_version})",
+                )
+            except Exception:
+                pass
+
     def predict(self, window: deque[FaceSample]) -> GesturePrediction | None:
         if self.model is None or len(window) < self.window_size:
             return None
