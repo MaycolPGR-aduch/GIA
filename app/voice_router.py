@@ -10,14 +10,14 @@ BUILTIN_COMMAND_SPECS = [
     {
         "id": "pause",
         "label": "Pausar sistema",
-        "description": "Pone el runtime en modo seguro sin clics ni voz.",
+        "description": "Pone el asistente en modo seguro, sin clics ni voz.",
         "default_phrases": ["pausar sistema", "pausa", "modo pausa"],
         "direct_action_id": "pause",
     },
     {
         "id": "resume",
         "label": "Reanudar sistema",
-        "description": "Saca el runtime del modo pausa.",
+        "description": "Saca el asistente del modo pausa.",
         "default_phrases": ["reanudar sistema", "continuar sistema", "reanudar"],
         "direct_action_id": "resume",
     },
@@ -44,8 +44,8 @@ BUILTIN_COMMAND_SPECS = [
     },
     {
         "id": "guide",
-        "label": "Abrir guia",
-        "description": "Muestra la guia rapida de gestos.",
+        "label": "Abrir guía",
+        "description": "Muestra la guía rápida de gestos.",
         "default_phrases": ["abrir guia", "mostrar guia", "ver guia"],
         "direct_action_id": "guide",
     },

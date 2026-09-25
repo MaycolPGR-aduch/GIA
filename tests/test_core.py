@@ -1,3 +1,4 @@
+import json
 import unittest
 import uuid
 from pathlib import Path
@@ -21,6 +22,8 @@ from app.heuristic_engine import HeuristicEngine
 from app.inference_service import InferenceService
 from app.models import AppState, FaceSample, GesturePrediction
 from app.voice_router import find_phrase_conflicts, normalize_voice_settings, resolve_command, resolve_command_entry
+from app.config_store import CALIBRATION_DIR, get_profile_summary
+from app.ui_theme import PALETTES, build_stylesheet
 
 
 def make_sample(ts: int) -> FaceSample:
@@ -516,6 +519,103 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(ui_calls, ["queued"])
         self.assertEqual(calls, ["compact"])
+
+    def test_build_stylesheet_supports_themes_and_font_scale(self):
+        dark = build_stylesheet("dark", 1.0)
+        high_contrast = build_stylesheet("high_contrast", 1.0)
+        scaled = build_stylesheet("dark", 1.5)
+        self.assertIn(PALETTES["dark"]["bg"], dark)
+        self.assertIn(PALETTES["high_contrast"]["accent"], high_contrast)
+        self.assertNotEqual(dark, high_contrast)
+        self.assertIn("font-size: 13px", dark)
+        self.assertIn("font-size: 20px", scaled)
+
+    def test_profile_summary_reads_active_model_without_creating_dirs(self):
+        profile_name = f"summary_profile_{uuid.uuid4().hex[:8]}"
+        profile = build_default_profile(profile_name)
+        profile["calibration"]["completed"] = True
+        save_profile(profile)
+        calibration_dir = CALIBRATION_DIR / profile_name
+        profile_path = Path("config") / "user_profiles" / f"{profile_name}.json"
+        try:
+            summary = get_profile_summary(profile_name)
+            self.assertTrue(summary["calibrated"])
+            self.assertIsNone(summary["model_version"])
+            self.assertFalse(calibration_dir.exists())
+
+            calibration_dir.mkdir(parents=True)
+            (calibration_dir / "model_registry.json").write_text(
+                json.dumps({
+                    "active_version": 2,
+                    "versions": [
+                        {"version": 1, "validation_accuracy": 0.5, "trained_at": "2026-01-01T00:00:00", "classes": ["a"]},
+                        {"version": 2, "validation_accuracy": 0.95, "trained_at": "2026-02-01T00:00:00", "classes": ["a", "b"]},
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            summary = get_profile_summary(profile_name)
+            self.assertEqual(summary["model_version"], 2)
+            self.assertAlmostEqual(summary["validation_accuracy"], 0.95)
+            self.assertEqual(summary["classes"], ["a", "b"])
+        finally:
+            if profile_path.exists():
+                profile_path.unlink()
+            if calibration_dir.exists():
+                rmtree(calibration_dir)
+
+    def _payload_controller(self):
+        controller = AssistiveController.__new__(AssistiveController)
+        controller.audio_level_monitor = None
+        controller.state = AppState.READY
+        controller.cursor_active = True
+        controller.last_voice_state = "en espera"
+        controller.last_voice_text = "-"
+        controller.last_voice_command = "-"
+        controller.last_rejection_reason = "-"
+        controller.last_diagnostic_hint = "-"
+        controller.fps_real = 14.24
+        controller.classifier = type("Classifier", (), {"active_version": 3})()
+        return controller
+
+    def test_status_payload_includes_execution_fields(self):
+        controller = self._payload_controller()
+        payload = controller._build_status_payload(
+            "Gesto ejecutado",
+            "left_blink_intent",
+            0.91,
+            runtime_state="ejecutado",
+            gesture_executed=True,
+        )
+        self.assertTrue(payload["gesture_executed"])
+        self.assertEqual(payload["gesture_title"], "Guiño izquierdo")
+        self.assertEqual(payload["gesture_action"], "Clic izquierdo")
+        self.assertEqual(payload["runtime_state"], "ejecutado")
+        self.assertTrue(payload["cursor_active"])
+        self.assertEqual(payload["fps_real"], 14.2)
+        self.assertEqual(payload["model_version"], 3)
+        self.assertAlmostEqual(payload["confidence_value"], 0.91)
+
+    def test_push_status_throttles_only_frame_updates(self):
+        controller = self._payload_controller()
+        emitted = []
+
+        class Signal:
+            def emit(self, payload):
+                emitted.append(payload)
+
+        class Gui:
+            signals = type("Signals", (), {"status_update": Signal()})()
+
+            def isVisible(self):
+                return True
+
+        controller.main_gui_interface = Gui()
+        controller._last_status_push = 0.0
+        controller._push_status("a", "-", 0.0, throttle=True)
+        controller._push_status("b", "-", 0.0, throttle=True)
+        controller._push_status("c", "left_blink_intent", 0.9, gesture_executed=True)
+        self.assertEqual([payload["status_text"] for payload in emitted], ["a", "c"])
 
 
 if __name__ == "__main__":

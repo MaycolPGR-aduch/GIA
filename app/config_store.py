@@ -267,6 +267,39 @@ def legacy_dataset_summary_path(profile_name: str) -> Path:
     return CALIBRATION_DIR / f"{profile_name}_samples.json"
 
 
+def confusion_matrix_path(profile_name: str, version: int) -> Path:
+    return CALIBRATION_DIR / profile_name / f"{profile_name}_confusion_matrix_v{version}.png"
+
+
+def get_profile_summary(profile_name: str) -> dict:
+    """Resumen de un perfil para mostrar en listas (sin crear carpetas)."""
+    summary = {
+        "name": profile_name,
+        "calibrated": False,
+        "model_version": None,
+        "validation_accuracy": None,
+        "trained_at": None,
+        "classes": [],
+    }
+    try:
+        profile = load_profile(profile_name)
+    except Exception:
+        return summary
+    summary["calibrated"] = bool(profile.get("calibration", {}).get("completed", False))
+
+    registry_file = CALIBRATION_DIR / profile_name / "model_registry.json"
+    registry = _read_json(registry_file) if registry_file.exists() else {}
+    active_version = registry.get("active_version")
+    for entry in registry.get("versions", []):
+        if entry.get("version") == active_version:
+            summary["model_version"] = active_version
+            summary["validation_accuracy"] = entry.get("validation_accuracy")
+            summary["trained_at"] = entry.get("trained_at")
+            summary["classes"] = list(entry.get("classes", []))
+            break
+    return summary
+
+
 def session_log_path(profile_name: str) -> Path:
     stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     return LOG_DIR / f"{profile_name}_{stamp}.jsonl"

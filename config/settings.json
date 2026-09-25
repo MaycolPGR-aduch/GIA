@@ -33,5 +33,6 @@
   "voice_record_seconds": 3.0,
   "high_contrast": false,
   "font_scale": 1.0,
-  "gesture_window_size": 12
+  "gesture_window_size": 12,
+  "last_profile": "Maycol"
 }

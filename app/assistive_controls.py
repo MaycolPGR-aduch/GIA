@@ -15,6 +15,7 @@ from pycaw.pycaw import AudioUtilities
 from .action_service import ActionService
 from .audio_utils import AudioLevelMonitor, capture_voice_clip, save_audio_clip
 from .config_store import parse_camera_resolution
+from .gesture_catalog import GESTURE_CATALOG
 from .gesture_ml import GestureClassifier
 from .heuristic_engine import HeuristicEngine
 from .inference_service import InferenceService
@@ -23,6 +24,15 @@ from .models import AppState, FaceSample, GesturePrediction
 from .session_logger import SessionLogger
 from .voice_router import resolve_command_entry
 
+
+# Ancho máximo del fotograma que se envía a la interfaz (se reduce en el hilo de trabajo).
+GUI_FRAME_WIDTH = 960
+COMPACT_FRAME_WIDTH = 200
+STATUS_PUSH_INTERVAL_S = 0.1
+GESTURE_LABELS = {
+    gesture["id"]: (gesture.get("short_title", gesture["title"]), gesture.get("short_action", gesture["action"]))
+    for gesture in GESTURE_CATALOG
+}
 
 AUDIO_RECORDING_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -91,6 +101,9 @@ class AssistiveController:
         self.last_rejection_reason = "-"
         self.last_diagnostic_hint = "-"
         self.show_camera_overlay_details = False
+        self.fps_real = 0.0
+        self._last_frame_time = None
+        self._last_status_push = 0.0
         self.hybrid_eye_closed_confidence_floor = 0.18
         self.hybrid_eye_closed_ratio_max = 0.19
         self.hybrid_eye_closed_asymmetry_max = 0.08
@@ -242,17 +255,45 @@ class AssistiveController:
                 self.logger.log("error", "No se pudo leer frame")
                 continue
 
+            self._update_fps(loop_start)
             snapshot = self.provider.process(frame_bgr)
             control_state = self.heuristics.update(snapshot.face_sample)
             prediction, inference_result = self._evaluate_gesture(snapshot.face_sample, control_state)
             self._apply_continuous_control(control_state)
-            frame_rgb = self._render_overlay(snapshot.frame_rgb, snapshot.face_sample, control_state, prediction, compact=False)
-            compact_frame_rgb = self._render_overlay(snapshot.frame_rgb, snapshot.face_sample, control_state, prediction, compact=True)
-            self._push_gui_frame(frame_rgb, compact_frame_rgb)
+            if self._gui_wants_frame():
+                compact = self._gui_is_compact()
+                frame_rgb = self._render_overlay(
+                    snapshot.frame_rgb, snapshot.face_sample, control_state, prediction, compact=compact
+                )
+                if compact:
+                    self._push_gui_frame(None, frame_rgb)
+                else:
+                    self._push_gui_frame(frame_rgb, None)
 
             elapsed = time.monotonic() - loop_start
             if elapsed < frame_delay:
                 time.sleep(frame_delay - elapsed)
+
+    def _update_fps(self, now: float) -> None:
+        last = getattr(self, "_last_frame_time", None)
+        self._last_frame_time = now
+        if last is None:
+            return
+        delta = now - last
+        if delta <= 0:
+            return
+        instant = 1.0 / delta
+        current = getattr(self, "fps_real", 0.0) or instant
+        self.fps_real = current * 0.9 + instant * 0.1
+
+    def _gui_is_compact(self) -> bool:
+        return bool(getattr(self.main_gui_interface, "is_compact_mode", False))
+
+    def _gui_wants_frame(self) -> bool:
+        """Descarta el fotograma si la interfaz aún no pintó el anterior."""
+        if not self._ui_available():
+            return False
+        return not bool(getattr(self.main_gui_interface, "frame_pending", False))
 
     def _evaluate_gesture(self, sample: FaceSample | None, control_state):
         if sample is not None:
@@ -305,6 +346,9 @@ class AssistiveController:
             cursor=result.cursor_label,
             rejection_reason=result.rejection_reason or result.prediction.reason if result.prediction else result.rejection_reason,
             diagnostic_hint=result.diagnostic_hint,
+            runtime_state=result.runtime_state,
+            gesture_executed=bool(result.executed),
+            throttle=not result.executed,
         )
         return prediction, result
 
@@ -514,97 +558,78 @@ class AssistiveController:
                 QTimer.singleShot(0, self.main_gui_interface.close)
 
     def _render_overlay(self, frame_rgb, sample, control_state, prediction, compact: bool = False):
-        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-        frame_height, frame_width = frame_bgr.shape[:2]
-        frame_center = (frame_width // 2, frame_height // 2)
-        neutral_point = (
-            int(self.heuristics.neutral_nose[0]) if self.heuristics.neutral_nose else frame_center[0],
-            int(self.heuristics.neutral_nose[1]) if self.heuristics.neutral_nose else frame_center[1],
-        )
+        """Dibuja la guía visual sobre una copia reducida del fotograma (RGB)."""
+        source_h, source_w = frame_rgb.shape[:2]
+        target_w = COMPACT_FRAME_WIDTH if compact else GUI_FRAME_WIDTH
+        scale = min(1.0, target_w / float(max(source_w, 1)))
+        if scale < 1.0:
+            frame = cv2.resize(frame_rgb, (int(source_w * scale), int(source_h * scale)), interpolation=cv2.INTER_AREA)
+        else:
+            frame = frame_rgb.copy()
+        frame_height, frame_width = frame.shape[:2]
 
-        cv2.line(frame_bgr, (frame_center[0] - 18, frame_center[1]), (frame_center[0] + 18, frame_center[1]), (255, 180, 0), 1)
-        cv2.line(frame_bgr, (frame_center[0], frame_center[1] - 18), (frame_center[0], frame_center[1] + 18), (255, 180, 0), 1)
-        cv2.circle(frame_bgr, frame_center, 4, (255, 180, 0), 1)
-        cv2.circle(frame_bgr, neutral_point, 8, (255, 0, 255), 2)
-        cv2.line(frame_bgr, (neutral_point[0] - 10, neutral_point[1]), (neutral_point[0] + 10, neutral_point[1]), (255, 0, 255), 2)
-        cv2.line(frame_bgr, (neutral_point[0], neutral_point[1] - 10), (neutral_point[0], neutral_point[1] + 10), (255, 0, 255), 2)
+        def scaled(point):
+            return int(point[0] * scale), int(point[1] * scale)
+
+        # Colores en RGB: el fotograma ya viene en RGB, no hace falta convertir a BGR.
+        amber = (255, 180, 0)
+        magenta = (255, 0, 255)
+        green = (80, 255, 60)
+        orange = (255, 128, 0)
+        white = (255, 255, 255)
+        info = (255, 220, 140)
+
+        frame_center = (frame_width // 2, frame_height // 2)
+        neutral = getattr(self.heuristics, "neutral_nose", None)
+        if neutral and tuple(neutral) != (0.0, 0.0):
+            neutral_point = scaled(neutral)
+        else:
+            neutral_point = frame_center
+
+        if not compact:
+            cv2.line(frame, (frame_center[0] - 14, frame_center[1]), (frame_center[0] + 14, frame_center[1]), amber, 1)
+            cv2.line(frame, (frame_center[0], frame_center[1] - 14), (frame_center[0], frame_center[1] + 14), amber, 1)
+        cv2.circle(frame, neutral_point, 7 if not compact else 4, magenta, 2)
 
         if sample is not None and not compact:
             for point in sample.points_px.values():
-                cv2.circle(frame_bgr, point, 1, (60, 255, 80), -1)
-            cv2.circle(frame_bgr, sample.nose_px, 5, (0, 128, 255), -1)
+                cv2.circle(frame, scaled(point), 1, green, -1)
+            cv2.circle(frame, scaled(sample.nose_px), 4, orange, -1)
         if self.mirror_preview:
-            frame_bgr = cv2.flip(frame_bgr, 1)
+            frame = cv2.flip(frame, 1)
 
-        if compact:
-            return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        if compact or not self.show_camera_overlay_details:
+            return frame
 
-        cv2.putText(frame_bgr, "Centro camara", (16, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 180, 0), 2)
-        cv2.putText(frame_bgr, "Referencia cursor", (16, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 0, 255), 2)
-
+        detail_y = 28
+        cv2.putText(frame, f"Estado: {self.state.value}", (14, detail_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, white, 2)
+        cv2.putText(
+            frame,
+            f"{control_state.status_text} | cursor: {self._cursor_status_text()}",
+            (14, detail_y + 24),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            white,
+            1,
+        )
+        metric_y = detail_y + 48
         if prediction is not None:
-            overlay = frame_bgr.copy()
-            badge_left = 18
-            badge_top = 82
-            badge_right = min(frame_width - 18, 440)
-            badge_bottom = 132
-            cv2.rectangle(overlay, (badge_left, badge_top), (badge_right, badge_bottom), (22, 163, 74), -1)
-            frame_bgr = cv2.addWeighted(overlay, 0.22, frame_bgr, 0.78, 0)
             cv2.putText(
-                frame_bgr,
-                prediction.gesture_id,
-                (34, 116),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.82,
-                (210, 255, 220),
-                2,
-            )
-
-        if self.show_camera_overlay_details:
-            detail_y = 178 if prediction is not None else 92
-            cv2.putText(frame_bgr, f"Estado: {self.state.value}", (16, detail_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv2.putText(
-                frame_bgr,
-                f"{control_state.status_text} | cursor: {self._cursor_status_text()}",
-                (16, detail_y + 28),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 255),
-                2,
-            )
-        if prediction is not None and self.show_camera_overlay_details:
-            cv2.putText(
-                frame_bgr,
+                frame,
                 f"Gesto: {prediction.gesture_id} ({prediction.confidence:.2f})",
-                (16, detail_y + 54),
+                (14, metric_y),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 220, 140),
-                2,
-            )
-            cv2.putText(
-                frame_bgr,
-                f"Motivo: {prediction.reason}",
-                (16, detail_y + 78),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                (255, 220, 140),
+                0.5,
+                info,
                 1,
             )
-        if self.show_camera_overlay_details:
-            metric_y = (detail_y + 110) if prediction is not None else 202
-            for key, value in control_state.debug_metrics.items():
-                cv2.putText(
-                    frame_bgr,
-                    f"{key}: {value:.3f}",
-                    (16, metric_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.55,
-                    (200, 255, 200),
-                    1,
-                )
-                metric_y += 22
-        return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            metric_y += 22
+            cv2.putText(frame, f"Motivo: {prediction.reason}", (14, metric_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, info, 1)
+            metric_y += 26
+        for key, value in control_state.debug_metrics.items():
+            cv2.putText(frame, f"{key}: {value:.3f}", (14, metric_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 255, 200), 1)
+            metric_y += 20
+        return frame
 
     def _cursor_status_text(self) -> str:
         return "activo" if self.cursor_active else "congelado"
@@ -681,6 +706,7 @@ class AssistiveController:
             return
         try:
             if hasattr(self.main_gui_interface, "signals"):
+                self.main_gui_interface.frame_pending = True
                 self.main_gui_interface.signals.video_update.emit(frame_rgb, compact_frame_rgb)
             elif hasattr(self.main_gui_interface, "root"):
                 self.main_gui_interface.root.after(
@@ -690,7 +716,7 @@ class AssistiveController:
         except Exception:
             pass
 
-    def _push_status(
+    def _build_status_payload(
         self,
         status_text,
         gesture,
@@ -704,26 +730,48 @@ class AssistiveController:
         voice_command=None,
         rejection_reason=None,
         diagnostic_hint=None,
-    ):
+        runtime_state=None,
+        gesture_executed=False,
+    ) -> dict:
         mic_payload = self._get_mic_status_payload()
-        payload = {
+        gesture_title, gesture_action = GESTURE_LABELS.get(gesture, (gesture, "")) if gesture else ("-", "")
+        return {
             "status_text": status_text,
             "gesture": gesture,
+            "gesture_title": gesture_title,
+            "gesture_action": gesture_action,
+            "gesture_executed": bool(gesture_executed),
             "confidence": f"{confidence:.2f}" if isinstance(confidence, (int, float)) else confidence,
+            "confidence_value": float(confidence) if isinstance(confidence, (int, float)) else 0.0,
             "face": face,
             "mode": mode or self.state.value,
             "cursor": cursor or self._cursor_status_text(),
+            "cursor_active": bool(self.cursor_active),
             "voice_state": voice_state or self.last_voice_state,
             "voice_text": voice_text or self.last_voice_text,
             "voice_command": voice_command or self.last_voice_command,
             "state": self.state.value,
+            "runtime_state": runtime_state or "",
             "rejection_reason": rejection_reason if rejection_reason is not None else self.last_rejection_reason,
             "diagnostic_hint": diagnostic_hint if diagnostic_hint is not None else self.last_diagnostic_hint,
             "model_version": self.classifier.active_version if self.classifier.active_version is not None else "-",
+            "fps_real": round(float(getattr(self, "fps_real", 0.0) or 0.0), 1),
             **mic_payload,
         }
+
+    def _push_status(self, status_text, gesture, confidence, *, throttle: bool = False, **kwargs):
+        """Envía el estado a la interfaz.
+
+        Con ``throttle=True`` (actualizaciones por fotograma) se limita a unas 10
+        por segundo; los eventos importantes (gesto ejecutado, voz) pasan siempre.
+        """
+        now = time.monotonic()
+        if throttle and now - getattr(self, "_last_status_push", 0.0) < STATUS_PUSH_INTERVAL_S:
+            return
         if not self._ui_available():
             return
+        self._last_status_push = now
+        payload = self._build_status_payload(status_text, gesture, confidence, **kwargs)
         try:
             if hasattr(self.main_gui_interface, "signals"):
                 self.main_gui_interface.signals.status_update.emit(payload)
@@ -731,7 +779,6 @@ class AssistiveController:
                 self.main_gui_interface.root.after(0, lambda: self.main_gui_interface.update_status(payload))
         except Exception:
             pass
-
 
     def _apply_camera_resolution(self, cap):
         width, height = parse_camera_resolution(self.settings.get("camera_resolution"))

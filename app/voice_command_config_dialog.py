@@ -19,9 +19,9 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
+    QWidget,
 )
 
-from .qt_helpers import MODERN_STYLE
 from .voice_router import (
     BUILTIN_COMMAND_SPECS,
     DIRECT_ACTION_SPEC_BY_ID,
@@ -42,26 +42,27 @@ class VoiceCommandConfigDialog(QDialog):
         self.settings = normalize_voice_settings(deepcopy(settings))
         self.current_builtin_id = None
         self.current_custom_id = None
-        self.setWindowTitle("Configuracion global de comandos de voz")
+        self.setWindowTitle("GIA · Comandos de voz")
         self.resize(980, 720)
-        self.setStyleSheet(MODERN_STYLE)
         self._build_ui()
         self._refresh_builtin_list()
         self._refresh_custom_list()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 16)
+        layout.setSpacing(10)
 
-        header = QLabel("Configuracion global de comandos de voz")
-        header.setStyleSheet("font-size: 18px; font-weight: bold; color: #3b82f6;")
+        header = QLabel("Configuración global de comandos de voz")
+        header.setProperty("role", "title")
         layout.addWidget(header)
 
         self.check_voice_enabled = QCheckBox("Habilitar comandos de voz globales")
         self.check_voice_enabled.setChecked(bool(self.settings.get("voice_commands_enabled", True)))
         layout.addWidget(self.check_voice_enabled)
 
-        model_note = QLabel("Modelo ASR activo: Whisper small")
-        model_note.setStyleSheet("color: #94a3b8;")
+        model_note = QLabel(f"Reconocimiento de voz: Whisper {self.settings.get('voice_model_size', 'small')} (sin conexión)")
+        model_note.setProperty("role", "muted")
         layout.addWidget(model_note)
 
         tabs = QTabWidget()
@@ -70,8 +71,9 @@ class VoiceCommandConfigDialog(QDialog):
         layout.addWidget(tabs, 1)
 
         actions = QHBoxLayout()
-        btn_save = QPushButton("Guardar configuracion")
-        btn_save.setObjectName("accentButton")
+        actions.addStretch(1)
+        btn_save = QPushButton("Guardar configuración")
+        btn_save.setProperty("variant", "primary")
         btn_save.clicked.connect(self._save_and_close)
         actions.addWidget(btn_save)
 
@@ -81,7 +83,7 @@ class VoiceCommandConfigDialog(QDialog):
         layout.addLayout(actions)
 
     def _build_builtin_tab(self):
-        container = QDialog()
+        container = QWidget()
         layout = QHBoxLayout(container)
 
         self.builtin_list = QListWidget()
@@ -92,18 +94,18 @@ class VoiceCommandConfigDialog(QDialog):
         editor_layout = QFormLayout(editor_box)
         self.lbl_builtin_desc = QLabel("Selecciona un comando base.")
         self.lbl_builtin_desc.setWordWrap(True)
-        editor_layout.addRow("Descripcion:", self.lbl_builtin_desc)
+        editor_layout.addRow("Descripción:", self.lbl_builtin_desc)
 
         helper = QLabel(
             "Estas frases son exactamente las opciones que puedes decir para activar el comando base seleccionado. "
-            "Escribe una frase por linea."
+            "Escribe una frase por línea."
         )
         helper.setWordWrap(True)
-        helper.setStyleSheet("color: #94a3b8;")
+        helper.setProperty("role", "muted")
         editor_layout.addRow(helper)
 
         self.txt_builtin_phrases = QTextEdit()
-        self.txt_builtin_phrases.setPlaceholderText("Una frase por linea")
+        self.txt_builtin_phrases.setPlaceholderText("Una frase por línea")
         self.txt_builtin_phrases.setMaximumHeight(180)
         editor_layout.addRow("Frases activas\n(que debes decir):", self.txt_builtin_phrases)
 
@@ -111,14 +113,14 @@ class VoiceCommandConfigDialog(QDialog):
         btn_builtin_save.clicked.connect(self._save_builtin_aliases)
         editor_layout.addRow(btn_builtin_save)
 
-        btn_builtin_reset = QPushButton("Restaurar defaults")
+        btn_builtin_reset = QPushButton("Restaurar valores por defecto")
         btn_builtin_reset.clicked.connect(self._reset_builtin_aliases)
         editor_layout.addRow(btn_builtin_reset)
         layout.addWidget(editor_box, 2)
         return container
 
     def _build_custom_tab(self):
-        container = QDialog()
+        container = QWidget()
         layout = QHBoxLayout(container)
 
         self.custom_list = QListWidget()
@@ -129,11 +131,11 @@ class VoiceCommandConfigDialog(QDialog):
         editor_layout = QFormLayout(editor_box)
 
         custom_help = QLabel(
-            "Un comando personalizado tiene dos partes: la frase que diras y la accion que quieres ejecutar. "
-            "Ejemplo: si escribes la frase 'copiar' y defines la macro 'Ctrl + C', cuando digas 'copiar' el sistema enviara Ctrl + C."
+            "Un comando personalizado tiene dos partes: la frase que dirás y la acción que quieres ejecutar. "
+            "Ejemplo: si escribes la frase 'copiar' y defines la macro 'Ctrl + C', cuando digas 'copiar' el sistema enviará Ctrl + C."
         )
         custom_help.setWordWrap(True)
-        custom_help.setStyleSheet("color: #94a3b8;")
+        custom_help.setProperty("role", "muted")
         editor_layout.addRow(custom_help)
 
         self.txt_custom_label = QLineEdit()
@@ -141,28 +143,28 @@ class VoiceCommandConfigDialog(QDialog):
         editor_layout.addRow("Nombre visible:", self.txt_custom_label)
 
         self.txt_custom_phrases = QTextEdit()
-        self.txt_custom_phrases.setPlaceholderText("Escribe aqui lo que vas a decir, por ejemplo:\ncopiar")
+        self.txt_custom_phrases.setPlaceholderText("Escribe aquí lo que vas a decir, por ejemplo:\ncopiar")
         self.txt_custom_phrases.setMaximumHeight(150)
         editor_layout.addRow("Frases activas\n(que debes decir):", self.txt_custom_phrases)
 
         self.cb_action_type = QComboBox()
         self.cb_action_type.addItem("Macro de teclado", "macro")
-        self.cb_action_type.addItem("Accion directa", "direct_action")
+        self.cb_action_type.addItem("Acción directa", "direct_action")
         self.cb_action_type.currentIndexChanged.connect(self._update_custom_action_widgets)
-        editor_layout.addRow("Tipo de accion:", self.cb_action_type)
+        editor_layout.addRow("Tipo de acción:", self.cb_action_type)
 
         self.txt_macro_keys = QLineEdit()
         self.txt_macro_keys.setPlaceholderText("Ej. Ctrl + C")
-        editor_layout.addRow("Macro\n(accion a ejecutar):", self.txt_macro_keys)
+        editor_layout.addRow("Macro\n(acción a ejecutar):", self.txt_macro_keys)
 
         self.cb_direct_action = QComboBox()
         for spec in get_direct_action_specs():
             self.cb_direct_action.addItem(spec["label"], spec["id"])
-        editor_layout.addRow("Accion directa\n(accion a ejecutar):", self.cb_direct_action)
+        editor_layout.addRow("Acción directa\n(acción a ejecutar):", self.cb_direct_action)
 
         self.lbl_custom_action_help = QLabel("")
         self.lbl_custom_action_help.setWordWrap(True)
-        self.lbl_custom_action_help.setStyleSheet("color: #94a3b8;")
+        self.lbl_custom_action_help.setProperty("role", "muted")
         editor_layout.addRow(self.lbl_custom_action_help)
 
         self.check_custom_enabled = QCheckBox("Comando habilitado")
@@ -179,7 +181,7 @@ class VoiceCommandConfigDialog(QDialog):
         buttons.addWidget(btn_save)
 
         btn_delete = QPushButton("Eliminar")
-        btn_delete.setObjectName("dangerButton")
+        btn_delete.setProperty("variant", "danger")
         btn_delete.clicked.connect(self._delete_custom_command)
         buttons.addWidget(btn_delete)
         editor_layout.addRow(buttons)
@@ -232,7 +234,7 @@ class VoiceCommandConfigDialog(QDialog):
             return
         phrases = split_phrases_text(self.txt_builtin_phrases.toPlainText())
         if not phrases:
-            QMessageBox.warning(self, "Alias invalidos", "Debes definir al menos una frase.")
+            QMessageBox.warning(self, "Alias inválidos", "Debes definir al menos una frase.")
             return
         conflicts = find_phrase_conflicts(phrases, self.settings, skip_kind="builtin", skip_id=self.current_builtin_id)
         if conflicts:
@@ -292,11 +294,11 @@ class VoiceCommandConfigDialog(QDialog):
         self.cb_direct_action.setVisible(not is_macro)
         if is_macro:
             self.lbl_custom_action_help.setText(
-                "Modo macro: escribe la combinacion de teclas que se ejecutara cuando digas una de las frases activas."
+                "Modo macro: escribe la combinación de teclas que se ejecutará cuando digas una de las frases activas."
             )
         else:
             self.lbl_custom_action_help.setText(
-                "Modo accion directa: selecciona una accion interna del sistema para que se ejecute cuando digas una de las frases activas."
+                "Modo acción directa: selecciona una acción interna del sistema para que se ejecute cuando digas una de las frases activas."
             )
 
     def _save_custom_command(self):
@@ -323,12 +325,12 @@ class VoiceCommandConfigDialog(QDialog):
         if action_type == "macro":
             macro_keys = parse_macro_keys(self.txt_macro_keys.text())
             if not macro_keys:
-                QMessageBox.warning(self, "Macro invalida", "Debes definir una combinacion de teclas valida.")
+                QMessageBox.warning(self, "Macro inválida", "Debes definir una combinación de teclas válida.")
                 return
         else:
             direct_action_id = self.cb_direct_action.currentData()
             if direct_action_id not in DIRECT_ACTION_SPEC_BY_ID:
-                QMessageBox.warning(self, "Accion invalida", "Debes seleccionar una accion directa valida.")
+                QMessageBox.warning(self, "Acción inválida", "Debes seleccionar una acción directa válida.")
                 return
 
         commands = self.settings.setdefault("voice_custom_commands", [])
