@@ -30,6 +30,8 @@ from app.ui_theme import PALETTES, build_stylesheet
 from app.audio_utils import pick_fallback_input_device
 from app.gesture_catalog import CONFIDENCE_THRESHOLD_MAX, CONFIDENCE_THRESHOLD_MIN
 from app.speech import SpeechQueue
+from app.preflight import evaluate_preflight, summarize_preflight
+from app.runtime_app import voice_status
 
 
 def make_sample(ts: int) -> FaceSample:
@@ -731,6 +733,124 @@ class CoreTests(unittest.TestCase):
             service.execute_gesture_action("confirm", "paused")
             service.execute_gesture_action("confirm", "ready")
         self.assertEqual(pressed, ["enter"])
+
+    def _preflight_snapshot(self, **overrides):
+        snapshot = {
+            "camera_state": "ok",
+            "camera_ok_for_s": 5.0,
+            "fps_real": 14.6,
+            "face_seen_ago_s": 0.1,
+            "mic_monitor_enabled": True,
+            "mic_available": True,
+            "mic_error": "",
+            "mic_device": "Micrófono",
+            "voice_model_state": "lista",
+            "voice_model_error": "",
+            "model_loaded": True,
+            "model_version": 3,
+            "model_accuracy": 0.98,
+            "hotkey_registered": True,
+        }
+        snapshot.update(overrides)
+        return snapshot
+
+    def test_preflight_all_ok(self):
+        checks = evaluate_preflight(self._preflight_snapshot(), elapsed_s=2.0, mic_peak_seen=0.3)
+        self.assertEqual({check.status for check in checks}, {"ok"})
+        self.assertEqual(summarize_preflight(checks), ("Todo listo", "success"))
+
+    def test_preflight_waits_then_reports_problems(self):
+        snapshot = self._preflight_snapshot(camera_state="abriendo", face_seen_ago_s=None, voice_model_state="cargando")
+        early = {check.key: check.status for check in evaluate_preflight(snapshot, elapsed_s=1.0)}
+        self.assertEqual(early["camera"], "pending")
+        self.assertEqual(early["face"], "pending")
+        self.assertEqual(early["mic"], "pending")
+        self.assertEqual(early["voice"], "pending")
+
+        late = {check.key: check for check in evaluate_preflight(snapshot, elapsed_s=12.0, mic_peak_seen=0.0)}
+        self.assertEqual(late["camera"].status, "error")
+        self.assertEqual(late["mic"].status, "error")
+        self.assertIn("Privacidad", late["mic"].detail)
+
+    def test_preflight_flags_missing_model_mic_error_and_hotkey(self):
+        snapshot = self._preflight_snapshot(
+            model_loaded=False,
+            mic_available=False,
+            mic_error="Error querying device -1",
+            hotkey_registered=False,
+            camera_ok_for_s=10.0,
+            face_seen_ago_s=None,
+        )
+        checks = {check.key: check for check in evaluate_preflight(snapshot, elapsed_s=12.0, mic_peak_seen=0.0)}
+        self.assertEqual(checks["model"].status, "error")
+        self.assertIn("No se encontró un micrófono", checks["mic"].detail)
+        self.assertEqual(checks["hotkey"].status, "warning")
+        self.assertEqual(checks["face"].status, "warning")
+        self.assertEqual(summarize_preflight(list(checks.values()))[1], "danger")
+
+    def test_voice_status_reports_model_loading(self):
+        self.assertEqual(voice_status({"voice_state": "en espera", "voice_model_state": "cargando"})[1], "info")
+        self.assertEqual(voice_status({"voice_state": "en espera", "voice_model_state": "error"})[1], "danger")
+        self.assertEqual(voice_status({"voice_state": "escuchando", "voice_model_state": "lista"})[1], "info")
+
+    def test_voice_listener_waits_for_model_load(self):
+        controller = AssistiveController.__new__(AssistiveController)
+        controller.voice_enabled = True
+        controller.whisper = None
+        controller.voice_model_state = "cargando"
+        controller.voice_thread = None
+        controller.state = AppState.READY
+        controller._cursor_status_text = lambda: "congelado"
+        events = []
+        controller._publish_event = events.append
+        controller._push_status = lambda *args, **kwargs: None
+        controller._start_voice_listener()
+        self.assertIsNone(controller.voice_thread)
+        self.assertIn("cargando", events[0])
+
+    def test_camera_reconnects_and_restores_state(self):
+        controller = AssistiveController.__new__(AssistiveController)
+        controller.running = True
+        controller.settings = {"camera_index": 0, "camera_resolution": "640x480"}
+        controller.state = AppState.PAUSED
+        controller.cap = None
+        controller.camera_state = "ok"
+        controller._camera_ok_since = 1.0
+        controller._state_before_camera_loss = None
+        controller.fps_real = 15.0
+        # Misma firma que SessionLogger.log para detectar choques de nombres de argumentos.
+        controller.logger = type("Logger", (), {"log": lambda self, event_type, detail, **payload: None})()
+        events = []
+        controller._publish_event = events.append
+        controller._push_status = lambda *args, **kwargs: None
+
+        opened = {"value": False}
+
+        class FakeCapture:
+            def __init__(self, index):
+                pass
+
+            def set(self, *args):
+                return True
+
+            def isOpened(self):
+                return opened["value"]
+
+            def release(self):
+                pass
+
+        with mock.patch.object(assistive_controls_module.cv2, "VideoCapture", FakeCapture), mock.patch.object(
+            assistive_controls_module, "CAMERA_RETRY_INTERVAL_S", 0.0
+        ):
+            controller._camera_lost("Se perdió la señal de la cámara.")
+            self.assertEqual(controller.state, AppState.ERROR)
+            self.assertFalse(controller._reconnect_camera())
+            self.assertEqual(controller.camera_state, "reconectando")
+            opened["value"] = True
+            self.assertTrue(controller._reconnect_camera())
+        self.assertEqual(controller.camera_state, "ok")
+        self.assertEqual(controller.state, AppState.PAUSED)
+        self.assertIn("Cámara reconectada.", events)
 
 if __name__ == "__main__":
     unittest.main()
