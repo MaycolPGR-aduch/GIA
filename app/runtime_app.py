@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import sys
+import time
 import webbrowser
 from html import escape
 
-from PySide6.QtCore import QObject, QPoint, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from app import ui_theme as theme
 from app.gesture_catalog import get_enabled_gesture_catalog
+from app.preflight import evaluate_preflight, summarize_preflight
 from app.ui_widgets import (
     Button,
     Card,
@@ -34,6 +36,7 @@ from app.ui_widgets import (
     StatusBadge,
     VideoView,
     format_accuracy,
+    icon,
     make_label,
     set_label_text,
 )
@@ -58,6 +61,113 @@ MIC_STATES = {
     "error": "Error de micrófono",
     "deshabilitado": "Monitor de micrófono deshabilitado",
 }
+
+
+def voice_status(payload: dict) -> tuple[str, str]:
+    """Texto y tono de la voz, teniendo en cuenta si el modelo Whisper ya está cargado."""
+    voice_state = payload.get("voice_state", "en espera")
+    model_state = payload.get("voice_model_state", "lista")
+    if voice_state == "en espera" and model_state == "cargando":
+        return "Cargando reconocimiento de voz…", "info"
+    if voice_state == "en espera" and model_state == "error":
+        return "Reconocimiento de voz no disponible", "danger"
+    return VOICE_STATES.get(voice_state, (str(voice_state).capitalize(), "muted"))
+
+
+# Icono y tono de cada estado de la verificación previa.
+PREFLIGHT_STYLES = {
+    "ok": ("check", "success"),
+    "warning": ("alert", "warning"),
+    "error": ("x", "danger"),
+    "pending": ("refresh", "info"),
+    "skipped": ("chevron_right", "muted"),
+}
+
+
+class PreflightDialog(QDialog):
+    """Verificación previa en vivo: cámara, rostro, micrófono, voz, modelo y atajo de emergencia."""
+
+    def __init__(self, parent: RuntimeMainWindow, controller):
+        super().__init__(parent)
+        self.controller = controller
+        self.setWindowTitle("GIA · Verificación del sistema")
+        self.setModal(False)
+        self.resize(620, 560)
+        self._rows: dict[str, tuple[QLabel, QLabel, QLabel]] = {}
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 18)
+        layout.setSpacing(12)
+        header = QHBoxLayout()
+        titles = QVBoxLayout()
+        titles.setSpacing(2)
+        titles.addWidget(make_label("Verificación del sistema", role="title"))
+        titles.addWidget(make_label("Comprueba que todo funciona antes de empezar.", role="muted"))
+        header.addLayout(titles, 1)
+        self.summary_badge = StatusBadge("Verificando…", "info", large=True)
+        header.addWidget(self.summary_badge, 0, Qt.AlignTop)
+        layout.addLayout(header)
+
+        card = Card(spacing=12)
+        for key in ("camera", "face", "mic", "voice", "model", "hotkey"):
+            row = QHBoxLayout()
+            row.setSpacing(12)
+            icon_label = QLabel()
+            icon_label.setFixedSize(26, 26)
+            row.addWidget(icon_label, 0, Qt.AlignTop)
+            texts = QVBoxLayout()
+            texts.setSpacing(1)
+            title = make_label("", role="h2")
+            detail = make_label("", role="muted", wrap=True)
+            texts.addWidget(title)
+            texts.addWidget(detail)
+            row.addLayout(texts, 1)
+            card.body.addLayout(row)
+            self._rows[key] = (icon_label, title, detail)
+        layout.addWidget(card)
+        layout.addStretch(1)
+
+        buttons = QHBoxLayout()
+        btn_retry = Button("Volver a verificar", "refresh", tooltip="Reinicia la prueba de micrófono y rostro")
+        btn_retry.clicked.connect(self.restart)
+        self.btn_continue = Button("Continuar", "check", variant="primary")
+        self.btn_continue.clicked.connect(self.accept)
+        buttons.addWidget(btn_retry)
+        buttons.addStretch(1)
+        buttons.addWidget(self.btn_continue)
+        layout.addLayout(buttons)
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(250)
+        self._timer.timeout.connect(self.refresh)
+        self.restart()
+
+    def restart(self):
+        self._started_at = time.monotonic()
+        self._mic_peak_seen = 0.0
+        self.refresh()
+        self._timer.start()
+
+    def refresh(self):
+        try:
+            snapshot = self.controller.preflight_snapshot()
+        except Exception as exc:
+            snapshot = {"camera_state": "error", "mic_error": str(exc)}
+        self._mic_peak_seen = max(self._mic_peak_seen, float(snapshot.get("mic_peak", 0.0) or 0.0))
+        checks = evaluate_preflight(snapshot, time.monotonic() - self._started_at, self._mic_peak_seen)
+        for check in checks:
+            icon_label, title, detail = self._rows[check.key]
+            icon_name, tone = PREFLIGHT_STYLES[check.status]
+            icon_label.setPixmap(icon(icon_name, theme.tone_color(tone), 26).pixmap(26, 26))
+            set_label_text(title, check.title)
+            set_label_text(detail, check.detail)
+            theme.set_widget_property(title, "tone", tone if check.status != "ok" else None)
+        text, tone = summarize_preflight(checks)
+        self.summary_badge.set_status(text, tone, pulse=tone == "info")
+
+    def done(self, result):
+        self._timer.stop()
+        super().done(result)
 
 
 def system_status(payload: dict) -> tuple[str, str, bool]:
@@ -174,6 +284,7 @@ class RuntimeMainWindow(QMainWindow):
         self.presentation_mode = False
         self._pre_presentation_scale = None
         self._compact_position = None
+        self._preflight_dialog = None
         self._last_payload: dict = {}
         self._last_mode = None
         self._last_cursor = None
@@ -263,9 +374,11 @@ class RuntimeMainWindow(QMainWindow):
         self.btn_contrast.clicked.connect(self._toggle_contrast)
         self.btn_presentation = Button("", "monitor", variant="ghost", tooltip="Modo presentación (F5)", checkable=True)
         self.btn_presentation.clicked.connect(self.toggle_presentation_mode)
+        btn_check = Button("", "check", variant="ghost", tooltip="Verificación del sistema (Ctrl+T)")
+        btn_check.clicked.connect(self.show_preflight_dialog)
         btn_help = Button("", "help", variant="ghost", tooltip="Guía rápida y atajos")
         btn_help.clicked.connect(self.show_guide_dialog)
-        for button in (self.btn_contrast, self.btn_presentation, btn_help):
+        for button in (btn_check, self.btn_contrast, self.btn_presentation, btn_help):
             button.setFixedSize(40, 40)
             layout.addWidget(button)
         return header
@@ -312,7 +425,7 @@ class RuntimeMainWindow(QMainWindow):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
 
-        self.btn_pause = Button("Pausar", "pause", variant="primary", tooltip="Pausar o reanudar el sistema (Ctrl+P)")
+        self.btn_pause = Button("Pausar", "pause", variant="primary", tooltip="Pausar o reanudar el sistema (Ctrl+P · Ctrl+Alt+P desde cualquier app)")
         self.btn_pause.clicked.connect(self._toggle_pause)
         self.btn_cursor = Button("Cursor congelado", "cursor", tooltip="Activar o congelar el cursor (Ctrl+K)")
         self.btn_cursor.clicked.connect(self._toggle_cursor)
@@ -387,6 +500,7 @@ class RuntimeMainWindow(QMainWindow):
             ("Ctrl+P", self._toggle_pause),
             ("Ctrl+K", self._toggle_cursor),
             ("Ctrl+R", self._recenter),
+            ("Ctrl+T", self.show_preflight_dialog),
             ("Ctrl+M", self._toggle_compact),
             ("Ctrl+D", lambda: self.diag_section.set_expanded(not self.diag_section.is_expanded())),
             ("Ctrl+H", self._toggle_contrast),
@@ -476,8 +590,8 @@ class RuntimeMainWindow(QMainWindow):
         set_label_text(self.lbl_confidence, f"{confidence * 100:.0f} %")
 
     def _update_voice(self, payload: dict, previous: dict):
-        voice_state = self._display_text(payload.get("voice_state", "en espera"))
-        text, tone = VOICE_STATES.get(voice_state, (voice_state.capitalize(), "muted"))
+        text, tone = voice_status(payload)
+        text = self._display_text(text)
         set_label_text(self.lbl_voice_state, text)
         theme.set_widget_property(self.lbl_voice_state, "tone", tone)
 
@@ -526,8 +640,8 @@ class RuntimeMainWindow(QMainWindow):
         voice_command = self._display_text(payload.get("voice_command", "-"))
         if payload.get("voice_state") == "comando reconocido" and voice_command not in ("", "-"):
             set_label_text(compact.last_label, f"Voz → {voice_command}")
-        voice_text, _ = VOICE_STATES.get(payload.get("voice_state", ""), ("", "muted"))
-        set_label_text(compact.voice_label, voice_text)
+        voice_text, _ = voice_status(payload)
+        set_label_text(compact.voice_label, self._display_text(voice_text))
         compact.mic_meter.set_value(payload.get("mic_level", 0))
 
     def _format_gesture_label(self, gesture_id):
@@ -601,6 +715,16 @@ class RuntimeMainWindow(QMainWindow):
         outer.addLayout(close_row)
         return dialog, layout
 
+    def show_preflight_dialog(self):
+        if self.controller is None or not hasattr(self.controller, "preflight_snapshot"):
+            return
+        if self._preflight_dialog is not None and self._preflight_dialog.isVisible():
+            self._preflight_dialog.raise_()
+            self._preflight_dialog.activateWindow()
+            return
+        self._preflight_dialog = PreflightDialog(self, self.controller)
+        self._preflight_dialog.show()
+
     def show_guide_dialog(self):
         dialog, layout = self._build_help_dialog("GIA · Guía rápida", (760, 640))
         layout.addWidget(make_label("Guía rápida de interacción", role="title"))
@@ -630,8 +754,10 @@ class RuntimeMainWindow(QMainWindow):
         layout.addWidget(make_label("ATAJOS DE TECLADO", role="cardTitle"))
         shortcuts = [
             ("Ctrl+P", "Pausar / reanudar"),
+            ("Ctrl+Alt+P", "Pausa de emergencia (en cualquier app)"),
             ("Ctrl+K", "Activar / congelar cursor"),
             ("Ctrl+R", "Recentrar cursor"),
+            ("Ctrl+T", "Verificación del sistema"),
             ("Ctrl+M", "Modo compacto"),
             ("F5", "Modo presentación"),
             ("Ctrl+H", "Alto contraste"),
@@ -844,4 +970,6 @@ def run_qt_runtime(profile: dict, settings: dict):
     window.set_controller(controller)
     window.show()
     controller.start()
+    if settings.get("preflight_on_start", True):
+        window.show_preflight_dialog()
     sys.exit(app.exec())

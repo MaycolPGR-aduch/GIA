@@ -7,21 +7,22 @@ import time
 import cv2
 import numpy as np
 import pyautogui
-import pyttsx3
 from faster_whisper import WhisperModel
 from PySide6.QtCore import QTimer
 from pycaw.pycaw import AudioUtilities
 
 from .action_service import ActionService
-from .audio_utils import AudioLevelMonitor, capture_voice_clip, save_audio_clip
+from .audio_utils import AudioLevelMonitor, capture_voice_clip, friendly_audio_error, save_audio_clip
 from .config_store import parse_camera_resolution
-from .gesture_catalog import GESTURE_CATALOG
+from .gesture_catalog import GESTURE_CATALOG, clamp_confidence_threshold
 from .gesture_ml import GestureClassifier
+from .global_hotkey import EMERGENCY_HOTKEY_LABEL, GlobalHotkey
 from .heuristic_engine import HeuristicEngine
 from .inference_service import InferenceService
 from .landmark_provider import LandmarkProvider
 from .models import AppState, FaceSample, GesturePrediction
 from .session_logger import SessionLogger
+from .speech import SpeechQueue
 from .voice_router import resolve_command_entry
 
 
@@ -29,6 +30,9 @@ from .voice_router import resolve_command_entry
 GUI_FRAME_WIDTH = 960
 COMPACT_FRAME_WIDTH = 200
 STATUS_PUSH_INTERVAL_S = 0.1
+# Lecturas fallidas seguidas (~1 s a 15 FPS) antes de dar la cámara por perdida.
+CAMERA_MAX_READ_FAILURES = 15
+CAMERA_RETRY_INTERVAL_S = 2.0
 GESTURE_LABELS = {
     gesture["id"]: (gesture.get("short_title", gesture["title"]), gesture.get("short_action", gesture["action"]))
     for gesture in GESTURE_CATALOG
@@ -76,7 +80,10 @@ class AssistiveController:
         self.voice_record_seconds = float(settings.get("voice_record_seconds", 3.0))
         self.voice_model_size = str(settings.get("voice_model_size", "small"))
         self.tts = self._configure_tts() if self.tts_enabled else None
-        self.whisper = WhisperModel(self.voice_model_size, device="cpu", compute_type="int8") if self.voice_enabled else None
+        # Whisper se carga en segundo plano al iniciar (start) para no congelar la interfaz.
+        self.whisper = None
+        self.voice_model_state = "cargando" if self.voice_enabled else "deshabilitada"
+        self.voice_model_error = ""
         self.audio_level_monitor = (
             AudioLevelMonitor(self.voice_sample_rate, device=self.audio_input_device)
             if self.voice_commands_enabled
@@ -94,7 +101,12 @@ class AssistiveController:
             audio_endpoint=self.audio_endpoint,
         )
 
+        self.emergency_hotkey = GlobalHotkey(self._emergency_toggle_pause)
         self.cap = None
+        self.camera_state = "abriendo"
+        self._camera_ok_since = None
+        self._state_before_camera_loss = None
+        self._last_face_seen_at = None
         self.last_voice_text = "-"
         self.last_voice_command = "-"
         self.last_voice_state = "en espera"
@@ -138,13 +150,7 @@ class AssistiveController:
             return None
 
     def _configure_tts(self):
-        try:
-            engine = pyttsx3.init()
-            engine.setProperty("rate", 150)
-            return engine
-        except Exception as exc:
-            print(f"Error configurando sintesis de voz: {exc}")
-            return None
+        return SpeechQueue()
 
     def start(self):
         if self.running:
@@ -160,6 +166,11 @@ class AssistiveController:
                     device=snapshot.get("device_label"),
                     error=snapshot.get("error", ""),
                 )
+                self._publish_event(friendly_audio_error(snapshot.get("error", "")))
+        if self.emergency_hotkey.start():
+            self._publish_event(f"Pausa de emergencia disponible en cualquier app: {EMERGENCY_HOTKEY_LABEL}")
+        else:
+            self._publish_event(f"No se pudo registrar {EMERGENCY_HOTKEY_LABEL} (¿lo usa otra aplicación?).")
         self.logger.log(
             "session",
             "Inicio de sesión",
@@ -168,12 +179,51 @@ class AssistiveController:
         )
         self.control_thread = threading.Thread(target=self._main_loop, daemon=True)
         self.control_thread.start()
+        if self.voice_enabled and self.whisper is None:
+            threading.Thread(target=self._load_voice_model, name="gia-whisper", daemon=True).start()
+
+    def _load_voice_model(self):
+        try:
+            model = WhisperModel(self.voice_model_size, device="cpu", compute_type="int8")
+        except Exception as exc:
+            self.voice_model_error = str(exc)
+            self.voice_model_state = "error"
+            self.logger.log("error", "No se pudo cargar el modelo de voz", error=str(exc))
+            self._publish_event(f"Reconocimiento de voz no disponible: {exc}")
+            return
+        self.whisper = model
+        self.voice_model_state = "lista"
+        self._publish_event("Reconocimiento de voz listo.")
+
+    def preflight_snapshot(self) -> dict:
+        """Foto del estado para la verificación previa (se lee desde la interfaz)."""
+        now = time.monotonic()
+        monitor = self.audio_level_monitor.snapshot() if self.audio_level_monitor is not None else {}
+        summary = self.classifier.training_summary or {}
+        return {
+            "camera_state": self.camera_state,
+            "camera_ok_for_s": now - self._camera_ok_since if self._camera_ok_since else 0.0,
+            "fps_real": float(self.fps_real or 0.0),
+            "face_seen_ago_s": now - self._last_face_seen_at if self._last_face_seen_at else None,
+            "mic_monitor_enabled": self.audio_level_monitor is not None,
+            "mic_available": bool(monitor.get("available")),
+            "mic_error": monitor.get("error", ""),
+            "mic_device": monitor.get("device_label", ""),
+            "mic_peak": float(monitor.get("peak", 0.0) or 0.0),
+            "voice_model_state": self.voice_model_state,
+            "voice_model_error": self.voice_model_error,
+            "model_loaded": self.classifier.model is not None,
+            "model_version": self.classifier.active_version,
+            "model_accuracy": summary.get("validation_accuracy"),
+            "hotkey_registered": bool(self.emergency_hotkey.registered),
+        }
 
     def stop(self):
         if not self.running:
             return
         self.running = False
         self.state = AppState.STOPPED
+        self.emergency_hotkey.stop()
         if self.control_thread and self.control_thread.is_alive():
             self.control_thread.join(timeout=3)
         if self.cap and self.cap.isOpened():
@@ -181,21 +231,19 @@ class AssistiveController:
         if self.audio_level_monitor is not None:
             self.audio_level_monitor.stop()
         self.provider.close()
+        if self.tts:
+            self.tts.stop()
         self.logger.log("session", "Fin de sesión", state=self.state.value)
         try:
             self.logger.export_excel()
         except Exception as exc:
             self.logger.log("error", "No se pudo exportar log Excel", error=str(exc))
 
-    def hablar(self, text: str):
+    def hablar(self, text: str, *, wait: bool = False):
+        """Publica el aviso y lo dice en voz alta sin bloquear (wait=True espera a terminar)."""
         self._publish_event(text)
-        if not self.tts:
-            return
-        try:
-            self.tts.say(text)
-            self.tts.runAndWait()
-        except Exception as exc:
-            print(f"Error reproduciendo TTS: {exc}")
+        if self.tts:
+            self.tts.say(text, wait=wait)
 
     def _publish_event(self, text: str):
         if self.main_gui_interface:
@@ -225,6 +273,10 @@ class AssistiveController:
         self.logger.log("state", "Cambio de pausa", state=self.state.value)
         self.hablar("Sistema reanudado." if self.state == AppState.READY else "Sistema en pausa.")
 
+    def _emergency_toggle_pause(self):
+        self.logger.log("state", "Atajo global de pausa", hotkey=EMERGENCY_HOTKEY_LABEL)
+        self.toggle_pause()
+
     def recenter(self):
         sample = self.inference.gesture_window[-1] if self.inference.gesture_window else None
         self.heuristics.recenter(sample)
@@ -232,31 +284,41 @@ class AssistiveController:
         self.hablar("Cursor recentrado.")
 
     def _main_loop(self):
-        self.cap = cv2.VideoCapture(int(self.settings.get("camera_index", 0)))
-        self._apply_camera_resolution(self.cap)
-        if not self.cap.isOpened():
-            self.state = AppState.ERROR
-            self._push_status("No se pudo abrir la cámara.", "-", 0.0, face="sin cámara")
-            return
-
-        self.hablar("Controles asistenciales iniciados.")
-        self.logger.log(
-            "runtime",
-            "Runtime iniciado",
-            profile=self.profile["name"],
-            model_version=self.classifier.active_version,
-        )
         frame_delay = 1.0 / max(int(self.settings.get("fps", 15)), 1)
+        announced = False
+        read_failures = 0
+        if not self._open_camera():
+            self._camera_lost("No se pudo abrir la cámara.")
 
         while self.running:
+            if self.camera_state != "ok" and not self._reconnect_camera():
+                continue
             loop_start = time.monotonic()
             ok, frame_bgr = self.cap.read()
             if not ok:
-                self.logger.log("error", "No se pudo leer frame")
+                read_failures += 1
+                if read_failures >= CAMERA_MAX_READ_FAILURES:
+                    read_failures = 0
+                    self._camera_lost("Se perdió la señal de la cámara.")
+                else:
+                    time.sleep(0.05)
                 continue
+            read_failures = 0
+
+            if not announced:
+                announced = True
+                self.hablar("Controles asistenciales iniciados.")
+                self.logger.log(
+                    "runtime",
+                    "Runtime iniciado",
+                    profile=self.profile["name"],
+                    model_version=self.classifier.active_version,
+                )
 
             self._update_fps(loop_start)
             snapshot = self.provider.process(frame_bgr)
+            if snapshot.face_sample is not None:
+                self._last_face_seen_at = time.monotonic()
             control_state = self.heuristics.update(snapshot.face_sample)
             prediction, inference_result = self._evaluate_gesture(snapshot.face_sample, control_state)
             self._apply_continuous_control(control_state)
@@ -273,6 +335,46 @@ class AssistiveController:
             elapsed = time.monotonic() - loop_start
             if elapsed < frame_delay:
                 time.sleep(frame_delay - elapsed)
+
+    def _open_camera(self) -> bool:
+        if self.cap is not None:
+            self.cap.release()
+        self.cap = cv2.VideoCapture(int(self.settings.get("camera_index", 0)))
+        self._apply_camera_resolution(self.cap)
+        if not self.cap.isOpened():
+            return False
+        self.camera_state = "ok"
+        self._camera_ok_since = time.monotonic()
+        return True
+
+    def _camera_lost(self, message: str) -> None:
+        """Pasa a modo sin cámara: sin acciones, y reintentos periódicos de reconexión."""
+        if self.cap is not None:
+            self.cap.release()
+        self.camera_state = "reconectando"
+        self._camera_ok_since = None
+        self._last_frame_time = None
+        self.fps_real = 0.0
+        if self.state != AppState.ERROR:
+            self._state_before_camera_loss = self.state
+            self.state = AppState.ERROR
+        self.logger.log("error", "Cámara no disponible", reason=message)
+        self._publish_event(f"{message} Reintentando cada {CAMERA_RETRY_INTERVAL_S:.0f} s…")
+        self._push_status(f"{message} Reintentando…", "-", 0.0, face="sin cámara")
+
+    def _reconnect_camera(self) -> bool:
+        deadline = time.monotonic() + CAMERA_RETRY_INTERVAL_S
+        while self.running and time.monotonic() < deadline:
+            time.sleep(0.1)  # en pasos cortos para que stop() no espere
+        if not self.running or not self._open_camera():
+            self.camera_state = "reconectando"
+            self._push_status("Cámara no disponible. Reintentando…", "-", 0.0, face="sin cámara")
+            return False
+        if self.state == AppState.ERROR:
+            self.state = self._state_before_camera_loss or AppState.READY
+        self.logger.log("runtime", "Cámara reconectada")
+        self._publish_event("Cámara reconectada.")
+        return True
 
     def _update_fps(self, now: float) -> None:
         last = getattr(self, "_last_frame_time", None)
@@ -365,7 +467,15 @@ class AssistiveController:
         self._start_voice_listener(trigger_source="manual")
 
     def _start_voice_listener(self, trigger_source: str = "gesture"):
-        if not self.voice_enabled or self.whisper is None:
+        if self.voice_enabled and self.whisper is None:
+            if getattr(self, "voice_model_state", "") == "cargando":
+                message = "El reconocimiento de voz aún se está cargando. Inténtalo en unos segundos."
+            else:
+                message = f"Reconocimiento de voz no disponible: {getattr(self, 'voice_model_error', '')}"
+            self._publish_event(message)
+            self._push_status(message, "-", 0.0, face="estable", mode=self.state.value, cursor=self._cursor_status_text())
+            return
+        if not self.voice_enabled:
             self.last_voice_state = "deshabilitada"
             self._push_status(
                 "Voz deshabilitada en este perfil.",
@@ -426,7 +536,8 @@ class AssistiveController:
             mode=self.state.value,
             cursor=self._cursor_status_text(),
         )
-        self.hablar("Escuchando.")
+        # Espera a terminar de hablar para que el micrófono no grabe el propio aviso.
+        self.hablar("Escuchando.", wait=True)
         self.logger.log(
             "voice",
             "Inicio escucha",
@@ -451,6 +562,11 @@ class AssistiveController:
                 f"RMS: {audio_diag['rms']:.4f} | "
                 f"Pico: {audio_diag['peak']:.4f}"
             )
+            if audio_diag["peak"] < 1e-4:
+                raise RuntimeError(
+                    "El micrófono no entrega señal (silencio absoluto). Revisa que no esté silenciado "
+                    "y que Windows lo permita en Privacidad > Micrófono."
+                )
             segments, _ = self.whisper.transcribe(
                 AUDIO_RECORDING_PATH,
                 language="es",
@@ -526,13 +642,14 @@ class AssistiveController:
                     diagnostic_hint="El texto se transcribio pero no coincidió con aliases confiables.",
                 )
         except Exception as exc:
+            message = str(exc) if isinstance(exc, RuntimeError) else friendly_audio_error(exc)
             self.logger.log("error", "Fallo en voz", error=str(exc))
             self.last_voice_state = "error"
-            self.last_voice_text = str(exc)
+            self.last_voice_text = message
             self.last_voice_command = "-"
-            self._publish_event(f"Error en voz: {exc}")
+            self._publish_event(f"Error en voz: {message}")
             self._push_status(
-                f"Error en voz: {exc}",
+                f"Error en voz: {message}",
                 "-",
                 0.0,
                 face="estable",
@@ -681,7 +798,7 @@ class AssistiveController:
             return True
         if prediction.gesture_id not in {"left_blink_intent", "right_blink_intent"}:
             return False
-        threshold = float(self.profile.get("gesture_confidence", {}).get(prediction.gesture_id, 0.5))
+        threshold = clamp_confidence_threshold(self.profile.get("gesture_confidence", {}).get(prediction.gesture_id, 0.5))
         return prediction.confidence < threshold
 
     def _passes_hybrid_gesture_validation(self, prediction, sample: FaceSample | None) -> bool:
@@ -756,6 +873,7 @@ class AssistiveController:
             "diagnostic_hint": diagnostic_hint if diagnostic_hint is not None else self.last_diagnostic_hint,
             "model_version": self.classifier.active_version if self.classifier.active_version is not None else "-",
             "fps_real": round(float(getattr(self, "fps_real", 0.0) or 0.0), 1),
+            "voice_model_state": getattr(self, "voice_model_state", "lista"),
             **mic_payload,
         }
 

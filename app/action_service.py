@@ -44,8 +44,9 @@ class ActionService:
             self.on_recenter()
         elif gesture_id == "brows_up":
             self.logger.log("gesture", "Gesto deshabilitado ignorado", gesture_id=gesture_id)
-        elif gesture_id == "confirm":
-            self.logger.log("gesture", "Confirmacion detectada", gesture_id=gesture_id)
+        elif gesture_id == "confirm" and app_state == "ready":
+            pyautogui.press("enter")
+            self.logger.log("gesture", "Confirmacion ejecutada (Enter)", gesture_id=gesture_id)
 
     def execute_voice_command(self, command_id: str, app_state: str) -> None:
         self.execute_builtin_voice_command(command_id, app_state)

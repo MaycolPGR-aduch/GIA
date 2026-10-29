@@ -18,6 +18,7 @@ from .config_store import (
     versioned_dataset_path,
     versioned_model_path,
 )
+from .gesture_catalog import CONFIDENCE_THRESHOLD_MIN, clamp_confidence_threshold
 from .models import FaceSample, GesturePrediction
 
 
@@ -159,9 +160,9 @@ class GestureClassifier:
                 if true_label == class_name and predicted_labels[row_index] == class_name
             ]
             if confidences:
-                threshold = float(np.clip(np.quantile(confidences, 0.25), 0.25, 0.90))
+                threshold = clamp_confidence_threshold(np.quantile(confidences, 0.25))
             else:
-                threshold = 0.30
+                threshold = CONFIDENCE_THRESHOLD_MIN
             thresholds[str(class_name)] = round(threshold, 3)
             total_rows = sum(1 for true_label in true_labels if true_label == class_name)
             if total_rows == 0:

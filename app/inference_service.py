@@ -3,8 +3,13 @@ from __future__ import annotations
 import time
 from collections import deque
 
-from .gesture_catalog import is_gesture_enabled
+from .gesture_catalog import clamp_confidence_threshold, is_gesture_enabled
 from .models import AppState, FaceSample, GestureInferenceResult, GesturePrediction
+
+
+# Hueco máximo (≈3 fotogramas a 15 FPS) sin una predicción confiable del mismo gesto antes
+# de reiniciar el conteo de duración: "sostener N ms" exige sostenerlo de forma continua.
+GESTURE_CONTINUITY_GAP_S = 0.25
 
 
 class InferenceService:
@@ -16,6 +21,7 @@ class InferenceService:
         self.gesture_cooldowns = profile.get("gesture_cooldown_ms", {})
         self.current_gesture = None
         self.current_gesture_started_at = 0.0
+        self.current_gesture_last_seen_at = 0.0
         self.latched_gesture = None
         self.last_action_at: dict[str, float] = {}
         self.last_reason_signature = None
@@ -91,7 +97,7 @@ class InferenceService:
                 should_log=False,
             )
 
-        threshold = float(self.gesture_thresholds.get(prediction.gesture_id, 0.6))
+        threshold = clamp_confidence_threshold(self.gesture_thresholds.get(prediction.gesture_id, 0.6))
         now = time.monotonic()
 
         if not control_state.face_stable:
@@ -116,7 +122,9 @@ class InferenceService:
         if prediction.confidence < threshold and allow_low_confidence:
             prediction.reason = "Aceptado por validación híbrida"
 
-        if prediction.gesture_id != self.current_gesture:
+        interrupted = now - self.current_gesture_last_seen_at > GESTURE_CONTINUITY_GAP_S
+        self.current_gesture_last_seen_at = now
+        if prediction.gesture_id != self.current_gesture or interrupted:
             self.current_gesture = prediction.gesture_id
             self.current_gesture_started_at = now
             return GestureInferenceResult(

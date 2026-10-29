@@ -47,9 +47,67 @@ def list_input_devices() -> list[dict]:
         return []
 
 
-def resolve_input_device(device_setting):
-    if device_setting in (None, "", "default"):
+def _system_default_input() -> int | None:
+    try:
+        index = sd.default.device[0]
+    except Exception:
         return None
+    return int(index) if index is not None and int(index) >= 0 else None
+
+
+_HOSTAPI_PREFERENCE = ("Windows WASAPI", "MME", "Windows DirectSound", "Windows WDM-KS")
+_NOT_A_MICROPHONE = ("mezcla", "stereo mix", "altavoz", "speaker", "output", "loopback")
+
+
+def pick_fallback_input_device(devices: list[dict]) -> dict | None:
+    """Elige el micrófono más probable cuando Windows no tiene uno predeterminado."""
+    candidates = [
+        device for device in devices
+        if not any(word in device["name"].lower() for word in _NOT_A_MICROPHONE)
+    ]
+    if not candidates:
+        return None
+
+    def rank(device: dict) -> tuple[int, int, int]:
+        name = device["name"].lower()
+        looks_like_mic = 0 if ("mic" in name or "micr" in name) else 1
+        hostapi = device.get("hostapi", "")
+        api_rank = _HOSTAPI_PREFERENCE.index(hostapi) if hostapi in _HOSTAPI_PREFERENCE else len(_HOSTAPI_PREFERENCE)
+        return looks_like_mic, api_rank, int(device["id"])
+
+    return min(candidates, key=rank)
+
+
+def _device_native_rate(device) -> int | None:
+    try:
+        info = sd.query_devices(device, "input")
+        return int(info["default_samplerate"])
+    except Exception:
+        return None
+
+
+def _resample(audio: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
+    if source_rate == target_rate:
+        return audio
+    from math import gcd
+
+    from scipy.signal import resample_poly
+
+    factor = gcd(int(source_rate), int(target_rate))
+    return resample_poly(audio, int(target_rate) // factor, int(source_rate) // factor).astype(np.float32)
+
+
+def resolve_input_device(device_setting):
+    """Traduce el ajuste a un dispositivo de sounddevice.
+
+    Con "predeterminado" devuelve None (PortAudio usa el del sistema). Si Windows no
+    tiene micrófono predeterminado (índice -1), usa el primer dispositivo de entrada.
+    """
+    if device_setting in (None, "", "default"):
+        if _system_default_input() is not None:
+            return None
+        fallback = pick_fallback_input_device(list_input_devices())
+        return fallback["id"] if fallback else None
     try:
         return int(device_setting)
     except (TypeError, ValueError):
@@ -68,6 +126,17 @@ def describe_input_device(device_setting) -> str:
         if device["id"] == resolved or device["name"] == resolved:
             return device["label"]
     return f"Dispositivo configurado: {resolved}"
+
+
+def friendly_audio_error(exc: Exception | str) -> str:
+    """Convierte los errores de PortAudio en un mensaje que se entienda en la demo."""
+    text = str(exc)
+    lowered = text.lower()
+    if "device -1" in lowered or "no default input" in lowered or "invalid device" in lowered:
+        return "No se encontró un micrófono. Conéctalo o elígelo en Configuración de voz y reinicia GIA."
+    if "unanticipated host error" in lowered or "access" in lowered:
+        return "Windows bloqueó el micrófono. Revisa Privacidad > Micrófono y que ninguna otra app lo use."
+    return f"Error de micrófono: {text}"
 
 
 def analyze_audio(audio: np.ndarray, sample_rate: int, *, device_label: str) -> dict:
@@ -90,17 +159,22 @@ def analyze_audio(audio: np.ndarray, sample_rate: int, *, device_label: str) -> 
 
 
 def capture_voice_clip(duration_s: float, sample_rate: int, *, device=None) -> tuple[np.ndarray, dict]:
-    sample_count = max(1, int(duration_s * sample_rate))
     resolved_device = resolve_input_device(device)
+    capture_rate = int(sample_rate)
+    try:
+        sd.check_input_settings(device=resolved_device, samplerate=capture_rate, channels=1, dtype="float32")
+    except Exception:
+        # Algunos controladores (p. ej. WDM-KS) no remuestrean: se graba a su frecuencia nativa.
+        capture_rate = _device_native_rate(resolved_device) or capture_rate
     recording = sd.rec(
-        sample_count,
-        samplerate=int(sample_rate),
+        max(1, int(duration_s * capture_rate)),
+        samplerate=capture_rate,
         channels=1,
         dtype="float32",
         device=resolved_device,
     )
     sd.wait()
-    mono = np.asarray(recording, dtype=np.float32).reshape(-1)
+    mono = _resample(np.asarray(recording, dtype=np.float32).reshape(-1), capture_rate, int(sample_rate))
     diagnostics = analyze_audio(
         mono,
         int(sample_rate),
@@ -162,9 +236,14 @@ class AudioLevelMonitor:
         if self._running:
             return True
         try:
-            blocksize = max(256, int(self.sample_rate * self.block_duration_s))
+            stream_rate = self.sample_rate
+            try:
+                sd.check_input_settings(device=self.device, samplerate=stream_rate, channels=1, dtype="float32")
+            except Exception:
+                stream_rate = _device_native_rate(self.device) or stream_rate
+            blocksize = max(256, int(stream_rate * self.block_duration_s))
             self._stream = sd.InputStream(
-                samplerate=self.sample_rate,
+                samplerate=stream_rate,
                 channels=1,
                 dtype="float32",
                 device=self.device,
