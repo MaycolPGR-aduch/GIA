@@ -94,17 +94,31 @@ GESTURE_CATALOG = [
         "enabled": True,
         "title": "Gesto de confirmación",
         "short_title": "Confirmación",
-        "short_action": "Confirmar",
-        "action": "Confirmar selección actual",
+        "short_action": "Enter",
+        "action": "Confirmar selección actual (tecla Enter)",
         "duration_ms": 650,
-        "warning": "Reservado para flujos guiados y extensiones futuras.",
+        "warning": "Pulsa Enter en la ventana activa; no actúa con el sistema en pausa.",
         "training_hint": "Usa siempre la misma expresión de confirmación para que el perfil sea consistente.",
         "common_failure_hint": "Si cambia mucho entre capturas, el modelo no aprenderá una firma clara.",
-        "success_hint": "Aunque hoy se use poco, conviene entrenarlo con buena consistencia.",
+        "success_hint": "Confirmación consistente: el perfil podrá pulsar Enter con este gesto.",
         "recommended_min_frames": 30,
         "recommended_min_windows": 13,
     },
 ]
+
+
+# Rango permitido para los umbrales de confianza por gesto. Por debajo de 0.55 el modelo
+# acepta gestos ambiguos (falsos positivos); por encima de 0.85 casi nunca los acepta en vivo.
+CONFIDENCE_THRESHOLD_MIN = 0.55
+CONFIDENCE_THRESHOLD_MAX = 0.85
+
+
+def clamp_confidence_threshold(value) -> float:
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        threshold = CONFIDENCE_THRESHOLD_MIN
+    return min(max(threshold, CONFIDENCE_THRESHOLD_MIN), CONFIDENCE_THRESHOLD_MAX)
 
 
 def get_enabled_gesture_catalog() -> list[dict]:

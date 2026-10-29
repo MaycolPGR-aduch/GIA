@@ -1,6 +1,9 @@
 import json
+import threading
+import time
 import unittest
 import uuid
+from unittest import mock
 from pathlib import Path
 from shutil import rmtree
 
@@ -24,6 +27,9 @@ from app.models import AppState, FaceSample, GesturePrediction
 from app.voice_router import find_phrase_conflicts, normalize_voice_settings, resolve_command, resolve_command_entry
 from app.config_store import CALIBRATION_DIR, get_profile_summary
 from app.ui_theme import PALETTES, build_stylesheet
+from app.audio_utils import pick_fallback_input_device
+from app.gesture_catalog import CONFIDENCE_THRESHOLD_MAX, CONFIDENCE_THRESHOLD_MIN
+from app.speech import SpeechQueue
 
 
 def make_sample(ts: int) -> FaceSample:
@@ -396,7 +402,7 @@ class CoreTests(unittest.TestCase):
         controller._cursor_status_text = lambda: "congelado"
         controller._push_status = lambda *args, **kwargs: None
         controller._publish_event = lambda text: None
-        controller.hablar = lambda text: None
+        controller.hablar = lambda text, **kwargs: None
         controller.logger = type("Logger", (), {"log": lambda self, *args, **kwargs: None})()
         controller.classifier = type("Classifier", (), {"active_version": 2})()
         executed = []
@@ -617,6 +623,114 @@ class CoreTests(unittest.TestCase):
         controller._push_status("c", "left_blink_intent", 0.9, gesture_executed=True)
         self.assertEqual([payload["status_text"] for payload in emitted], ["a", "c"])
 
+
+    def _run_smile_sequence(self, profile, steps):
+        """Evalúa (segundo, confianza) de "smile" con un reloj simulado."""
+        service = InferenceService(profile, window_size=4)
+        sample = make_sample(1)
+        state = type("State", (), {"face_stable": True, "status_text": "ok"})()
+        clock = {"now": 100.0}
+        fake_time = type("FakeTime", (), {"monotonic": staticmethod(lambda: clock["now"])})
+        results = []
+        with mock.patch("app.inference_service.time", fake_time):
+            for at, confidence in steps:
+                clock["now"] = 100.0 + at
+                prediction = GesturePrediction("smile", confidence, False)
+                results.append(service.evaluate(sample, state, prediction, AppState.READY, "activo"))
+        return results
+
+    def test_inference_service_requires_continuous_duration(self):
+        profile = build_default_profile("continuity")
+        profile["gesture_confidence"]["smile"] = 0.6
+        profile["gesture_duration_ms"]["smile"] = 600
+        profile["gesture_cooldown_ms"]["smile"] = 0
+        # Dos fotogramas confiables separados por 650 ms de confianza baja: no debe ejecutar.
+        steps = [(0.0, 0.7)] + [(0.1 * i, 0.3) for i in range(1, 7)] + [(0.65, 0.7)]
+        self.assertFalse(any(result.executed for result in self._run_smile_sequence(profile, steps)))
+        # Sostenido de verdad (un fotograma débil aislado se tolera): sí ejecuta.
+        steps = [(0.07 * i, 0.3 if i == 4 else 0.7) for i in range(10)]
+        self.assertTrue(self._run_smile_sequence(profile, steps)[-1].executed)
+
+    def test_inference_service_clamps_profile_thresholds(self):
+        profile = build_default_profile("clamped")
+        profile["gesture_confidence"]["smile"] = 0.40
+        profile["gesture_duration_ms"]["smile"] = 0
+        rejected = self._run_smile_sequence(profile, [(0.0, 0.50)])[0]
+        self.assertEqual(rejected.rejection_reason, "confianza baja")
+        profile["gesture_confidence"]["mouth_open_hold"] = 0.95
+        service = InferenceService(profile, window_size=4)
+        state = type("State", (), {"face_stable": True, "status_text": "ok"})()
+        prediction = GesturePrediction("mouth_open_hold", 0.88, False)
+        result = service.evaluate(make_sample(1), state, prediction, AppState.READY, "activo")
+        self.assertEqual(result.runtime_state, "validando gesto")
+
+    def test_recommended_thresholds_stay_in_range(self):
+        classifier = GestureClassifier.__new__(GestureClassifier)
+        classes = np.array(["neutral", "smile"])
+        labels = ["smile", "smile", "neutral", "neutral"]
+        predicted = np.array(["smile", "smile", "neutral", "neutral"])
+        probabilities = np.array([[0.55, 0.45], [0.6, 0.4], [0.98, 0.02], [0.99, 0.01]])
+        thresholds, _ = classifier._recommended_thresholds(labels, predicted, probabilities, classes)
+        self.assertEqual(thresholds["smile"], CONFIDENCE_THRESHOLD_MIN)
+        self.assertEqual(thresholds["neutral"], CONFIDENCE_THRESHOLD_MAX)
+
+    def test_speech_queue_does_not_block_and_drops_stale_messages(self):
+        spoken = []
+        speaking = threading.Event()
+        release = threading.Event()
+
+        class SlowEngine:
+            def say(self, text):
+                spoken.append(text)
+                speaking.set()
+
+            def runAndWait(self):
+                release.wait(2.0)
+
+        queue = SpeechQueue(engine_factory=SlowEngine, max_pending=1)
+        try:
+            started = time.monotonic()
+            queue.say("uno")
+            self.assertTrue(speaking.wait(2.0))  # el motor queda ocupado diciendo "uno"
+            queue.say("dos")
+            queue.say("tres")
+            self.assertLess(time.monotonic() - started, 0.5)
+            queue.say("cuatro")  # descarta "tres" mientras el motor sigue ocupado
+            release.set()
+            deadline = time.monotonic() + 2.0
+            while len(spoken) < 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+        finally:
+            queue.stop()
+        self.assertEqual(spoken, ["uno", "cuatro"])
+
+    def test_fallback_input_device_prefers_real_microphone(self):
+        devices = [
+            {"id": 7, "name": "Altavoz de PC (Realtek output)", "hostapi": "Windows WDM-KS"},
+            {"id": 9, "name": "Mezcla estéreo (Realtek)", "hostapi": "MME"},
+            {"id": 8, "name": "Micrófono (Realtek HD Audio Mic input)", "hostapi": "Windows WDM-KS"},
+            {"id": 2, "name": "Micrófono (Realtek)", "hostapi": "MME"},
+        ]
+        self.assertEqual(pick_fallback_input_device(devices)["id"], 2)
+        self.assertIsNone(pick_fallback_input_device(devices[:2]))
+
+    def test_confirm_gesture_presses_enter_only_when_ready(self):
+        service = ActionService(
+            type("Logger", (), {"log": lambda self, *args, **kwargs: None})(),
+            on_voice_listener=lambda: None,
+            on_toggle_cursor=lambda: None,
+            on_recenter=lambda: None,
+            on_toggle_pause=lambda: None,
+            on_set_cursor=lambda value: None,
+            on_quit=lambda: None,
+            main_gui_interface=None,
+            audio_endpoint=None,
+        )
+        pressed = []
+        with mock.patch.object(action_service_module.pyautogui, "press", lambda key: pressed.append(key)):
+            service.execute_gesture_action("confirm", "paused")
+            service.execute_gesture_action("confirm", "ready")
+        self.assertEqual(pressed, ["enter"])
 
 if __name__ == "__main__":
     unittest.main()

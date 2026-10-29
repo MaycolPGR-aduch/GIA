@@ -7,21 +7,22 @@ import time
 import cv2
 import numpy as np
 import pyautogui
-import pyttsx3
 from faster_whisper import WhisperModel
 from PySide6.QtCore import QTimer
 from pycaw.pycaw import AudioUtilities
 
 from .action_service import ActionService
-from .audio_utils import AudioLevelMonitor, capture_voice_clip, save_audio_clip
+from .audio_utils import AudioLevelMonitor, capture_voice_clip, friendly_audio_error, save_audio_clip
 from .config_store import parse_camera_resolution
-from .gesture_catalog import GESTURE_CATALOG
+from .gesture_catalog import GESTURE_CATALOG, clamp_confidence_threshold
 from .gesture_ml import GestureClassifier
+from .global_hotkey import EMERGENCY_HOTKEY_LABEL, GlobalHotkey
 from .heuristic_engine import HeuristicEngine
 from .inference_service import InferenceService
 from .landmark_provider import LandmarkProvider
 from .models import AppState, FaceSample, GesturePrediction
 from .session_logger import SessionLogger
+from .speech import SpeechQueue
 from .voice_router import resolve_command_entry
 
 
@@ -94,6 +95,7 @@ class AssistiveController:
             audio_endpoint=self.audio_endpoint,
         )
 
+        self.emergency_hotkey = GlobalHotkey(self._emergency_toggle_pause)
         self.cap = None
         self.last_voice_text = "-"
         self.last_voice_command = "-"
@@ -138,13 +140,7 @@ class AssistiveController:
             return None
 
     def _configure_tts(self):
-        try:
-            engine = pyttsx3.init()
-            engine.setProperty("rate", 150)
-            return engine
-        except Exception as exc:
-            print(f"Error configurando sintesis de voz: {exc}")
-            return None
+        return SpeechQueue()
 
     def start(self):
         if self.running:
@@ -160,6 +156,11 @@ class AssistiveController:
                     device=snapshot.get("device_label"),
                     error=snapshot.get("error", ""),
                 )
+                self._publish_event(friendly_audio_error(snapshot.get("error", "")))
+        if self.emergency_hotkey.start():
+            self._publish_event(f"Pausa de emergencia disponible en cualquier app: {EMERGENCY_HOTKEY_LABEL}")
+        else:
+            self._publish_event(f"No se pudo registrar {EMERGENCY_HOTKEY_LABEL} (¿lo usa otra aplicación?).")
         self.logger.log(
             "session",
             "Inicio de sesión",
@@ -174,6 +175,7 @@ class AssistiveController:
             return
         self.running = False
         self.state = AppState.STOPPED
+        self.emergency_hotkey.stop()
         if self.control_thread and self.control_thread.is_alive():
             self.control_thread.join(timeout=3)
         if self.cap and self.cap.isOpened():
@@ -181,21 +183,19 @@ class AssistiveController:
         if self.audio_level_monitor is not None:
             self.audio_level_monitor.stop()
         self.provider.close()
+        if self.tts:
+            self.tts.stop()
         self.logger.log("session", "Fin de sesión", state=self.state.value)
         try:
             self.logger.export_excel()
         except Exception as exc:
             self.logger.log("error", "No se pudo exportar log Excel", error=str(exc))
 
-    def hablar(self, text: str):
+    def hablar(self, text: str, *, wait: bool = False):
+        """Publica el aviso y lo dice en voz alta sin bloquear (wait=True espera a terminar)."""
         self._publish_event(text)
-        if not self.tts:
-            return
-        try:
-            self.tts.say(text)
-            self.tts.runAndWait()
-        except Exception as exc:
-            print(f"Error reproduciendo TTS: {exc}")
+        if self.tts:
+            self.tts.say(text, wait=wait)
 
     def _publish_event(self, text: str):
         if self.main_gui_interface:
@@ -224,6 +224,10 @@ class AssistiveController:
         self.state = AppState.READY if self.state == AppState.PAUSED else AppState.PAUSED
         self.logger.log("state", "Cambio de pausa", state=self.state.value)
         self.hablar("Sistema reanudado." if self.state == AppState.READY else "Sistema en pausa.")
+
+    def _emergency_toggle_pause(self):
+        self.logger.log("state", "Atajo global de pausa", hotkey=EMERGENCY_HOTKEY_LABEL)
+        self.toggle_pause()
 
     def recenter(self):
         sample = self.inference.gesture_window[-1] if self.inference.gesture_window else None
@@ -426,7 +430,8 @@ class AssistiveController:
             mode=self.state.value,
             cursor=self._cursor_status_text(),
         )
-        self.hablar("Escuchando.")
+        # Espera a terminar de hablar para que el micrófono no grabe el propio aviso.
+        self.hablar("Escuchando.", wait=True)
         self.logger.log(
             "voice",
             "Inicio escucha",
@@ -451,6 +456,11 @@ class AssistiveController:
                 f"RMS: {audio_diag['rms']:.4f} | "
                 f"Pico: {audio_diag['peak']:.4f}"
             )
+            if audio_diag["peak"] < 1e-4:
+                raise RuntimeError(
+                    "El micrófono no entrega señal (silencio absoluto). Revisa que no esté silenciado "
+                    "y que Windows lo permita en Privacidad > Micrófono."
+                )
             segments, _ = self.whisper.transcribe(
                 AUDIO_RECORDING_PATH,
                 language="es",
@@ -526,13 +536,14 @@ class AssistiveController:
                     diagnostic_hint="El texto se transcribio pero no coincidió con aliases confiables.",
                 )
         except Exception as exc:
+            message = str(exc) if isinstance(exc, RuntimeError) else friendly_audio_error(exc)
             self.logger.log("error", "Fallo en voz", error=str(exc))
             self.last_voice_state = "error"
-            self.last_voice_text = str(exc)
+            self.last_voice_text = message
             self.last_voice_command = "-"
-            self._publish_event(f"Error en voz: {exc}")
+            self._publish_event(f"Error en voz: {message}")
             self._push_status(
-                f"Error en voz: {exc}",
+                f"Error en voz: {message}",
                 "-",
                 0.0,
                 face="estable",
@@ -681,7 +692,7 @@ class AssistiveController:
             return True
         if prediction.gesture_id not in {"left_blink_intent", "right_blink_intent"}:
             return False
-        threshold = float(self.profile.get("gesture_confidence", {}).get(prediction.gesture_id, 0.5))
+        threshold = clamp_confidence_threshold(self.profile.get("gesture_confidence", {}).get(prediction.gesture_id, 0.5))
         return prediction.confidence < threshold
 
     def _passes_hybrid_gesture_validation(self, prediction, sample: FaceSample | None) -> bool:

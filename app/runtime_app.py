@@ -312,7 +312,7 @@ class RuntimeMainWindow(QMainWindow):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
 
-        self.btn_pause = Button("Pausar", "pause", variant="primary", tooltip="Pausar o reanudar el sistema (Ctrl+P)")
+        self.btn_pause = Button("Pausar", "pause", variant="primary", tooltip="Pausar o reanudar el sistema (Ctrl+P · Ctrl+Alt+P desde cualquier app)")
         self.btn_pause.clicked.connect(self._toggle_pause)
         self.btn_cursor = Button("Cursor congelado", "cursor", tooltip="Activar o congelar el cursor (Ctrl+K)")
         self.btn_cursor.clicked.connect(self._toggle_cursor)
@@ -630,6 +630,7 @@ class RuntimeMainWindow(QMainWindow):
         layout.addWidget(make_label("ATAJOS DE TECLADO", role="cardTitle"))
         shortcuts = [
             ("Ctrl+P", "Pausar / reanudar"),
+            ("Ctrl+Alt+P", "Pausa de emergencia (en cualquier app)"),
             ("Ctrl+K", "Activar / congelar cursor"),
             ("Ctrl+R", "Recentrar cursor"),
             ("Ctrl+M", "Modo compacto"),
