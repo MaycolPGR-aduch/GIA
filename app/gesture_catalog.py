@@ -150,6 +150,36 @@ NEUTRAL_GESTURE_META = {
 }
 
 
+# Paso de calibración con "ejemplos difíciles": hablar, mirar alrededor y reír sin hacer
+# gestos de control. Se entrena como clase neutral para que el modelo aprenda a ignorarlos.
+NEUTRAL_DYNAMIC_ID = "neutral_dynamic"
+NEUTRAL_DYNAMIC_META = {
+    "id": NEUTRAL_DYNAMIC_ID,
+    "title": "Neutral en movimiento",
+    "short_title": "Neutral en movimiento",
+    "short_action": "Hablar y moverse sin gestos",
+    "action": "Enseña al modelo qué NO es un gesto",
+    "duration_ms": 0,
+    "warning": "No hagas los gestos de control durante esta captura.",
+    "training_hint": (
+        "Habla con normalidad (cuenta del 1 al 20, di tu nombre), mira a los lados, "
+        "ríete un poco y parpadea con naturalidad, como al usar el PC."
+    ),
+    "common_failure_hint": "Si haces un guiño o la boca en O a propósito aquí, el modelo aprenderá a ignorarlos.",
+    "success_hint": "Buen ejemplo de movimiento natural: reducirá los gestos falsos al hablar.",
+    "capture_prompt": "¡Habla y muévete con naturalidad!",
+    "recommended_min_frames": 225,
+    "recommended_min_windows": 200,
+}
+
+# Clase con la que se entrena cada paso de calibración (los pasos no listados usan su id).
+TRAINING_LABEL_ALIASES = {NEUTRAL_DYNAMIC_ID: "neutral"}
+
+
+def training_label(gesture_id: str) -> str:
+    return TRAINING_LABEL_ALIASES.get(gesture_id, gesture_id)
+
+
 VOICE_COMMAND_HELP = [
     ("Pausar sistema", "Pone el runtime en modo seguro sin clics ni voz."),
     ("Reanudar sistema", "Saca el runtime del modo pausa."),

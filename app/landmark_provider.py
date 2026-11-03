@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -43,6 +44,20 @@ FACE_WIDTH = [234, 454]
 NOSE_IDX = 1
 
 
+def head_pose_from_matrix(matrix) -> tuple[float, float, float] | None:
+    """(pitch, yaw, roll) en grados a partir de la matriz de transformación facial 4x4."""
+    try:
+        rotation = np.asarray(matrix, dtype=np.float64)[:3, :3]
+    except Exception:
+        return None
+    if rotation.shape != (3, 3):
+        return None
+    pitch = math.degrees(math.atan2(rotation[2, 1], rotation[2, 2]))
+    yaw = math.degrees(math.asin(max(-1.0, min(1.0, -rotation[2, 0]))))
+    roll = math.degrees(math.atan2(rotation[1, 0], rotation[0, 0]))
+    return (pitch, yaw, roll)
+
+
 @dataclass(slots=True)
 class DetectionSnapshot:
     frame_rgb: np.ndarray
@@ -61,6 +76,8 @@ class LandmarkProvider:
             min_face_detection_confidence=0.5,
             min_face_presence_confidence=0.5,
             min_tracking_confidence=0.5,
+            output_face_blendshapes=True,
+            output_facial_transformation_matrixes=True,
         )
         self.landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
 
@@ -77,10 +94,17 @@ class LandmarkProvider:
 
         landmarks = result.face_landmarks[0]
         height, width = frame_bgr.shape[:2]
-        points_px = {
-            idx: (int(landmarks[idx].x * width), int(landmarks[idx].y * height))
-            for idx in set(SELECTED_LANDMARKS + LEFT_EYE + RIGHT_EYE + MOUTH_OPEN + BROW_LEFT + BROW_RIGHT + FACE_WIDTH)
-        }
+        indices = set(SELECTED_LANDMARKS + LEFT_EYE + RIGHT_EYE + MOUTH_OPEN + BROW_LEFT + BROW_RIGHT + FACE_WIDTH)
+        points_precise = {idx: (landmarks[idx].x * width, landmarks[idx].y * height) for idx in indices}
+        # Las métricas y el dibujo siguen usando píxeles enteros para no cambiar el
+        # comportamiento de los modelos ya entrenados.
+        points_px = {idx: (int(x), int(y)) for idx, (x, y) in points_precise.items()}
+        blendshapes = {}
+        if getattr(result, "face_blendshapes", None):
+            blendshapes = {category.category_name: float(category.score) for category in result.face_blendshapes[0]}
+        head_pose = None
+        if getattr(result, "facial_transformation_matrixes", None):
+            head_pose = head_pose_from_matrix(result.facial_transformation_matrixes[0])
 
         center = points_px[NOSE_IDX]
         face_width_px = max(
@@ -115,6 +139,9 @@ class LandmarkProvider:
             nose_px=points_px[NOSE_IDX],
             face_scale_px=face_width_px,
             face_center_px=center,
+            points_precise=points_precise,
+            blendshapes=blendshapes,
+            head_pose=head_pose,
         )
         return DetectionSnapshot(frame_rgb=frame_rgb, face_sample=sample)
 

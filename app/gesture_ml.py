@@ -18,7 +18,12 @@ from .config_store import (
     versioned_dataset_path,
     versioned_model_path,
 )
-from .gesture_catalog import CONFIDENCE_THRESHOLD_MIN, clamp_confidence_threshold
+from .gesture_catalog import (
+    CONFIDENCE_THRESHOLD_MIN,
+    NEUTRAL_DYNAMIC_ID,
+    clamp_confidence_threshold,
+    training_label,
+)
 from .models import FaceSample, GesturePrediction
 
 
@@ -72,8 +77,23 @@ class GestureFeatureExtractor:
         return feature_vector.astype(np.float32)
 
 
+# Orden fijo de los blendshapes de MediaPipe Face Landmarker: se guardan como lista para
+# no repetir los 52 nombres en cada fotograma del dataset.
+BLENDSHAPE_NAMES = (
+    "_neutral", "browDownLeft", "browDownRight", "browInnerUp", "browOuterUpLeft", "browOuterUpRight",
+    "cheekPuff", "cheekSquintLeft", "cheekSquintRight", "eyeBlinkLeft", "eyeBlinkRight", "eyeLookDownLeft",
+    "eyeLookDownRight", "eyeLookInLeft", "eyeLookInRight", "eyeLookOutLeft", "eyeLookOutRight", "eyeLookUpLeft",
+    "eyeLookUpRight", "eyeSquintLeft", "eyeSquintRight", "eyeWideLeft", "eyeWideRight", "jawForward", "jawLeft",
+    "jawOpen", "jawRight", "mouthClose", "mouthDimpleLeft", "mouthDimpleRight", "mouthFrownLeft",
+    "mouthFrownRight", "mouthFunnel", "mouthLeft", "mouthLowerDownLeft", "mouthLowerDownRight", "mouthPressLeft",
+    "mouthPressRight", "mouthPucker", "mouthRight", "mouthRollLower", "mouthRollUpper", "mouthShrugLower",
+    "mouthShrugUpper", "mouthSmileLeft", "mouthSmileRight", "mouthStretchLeft", "mouthStretchRight",
+    "mouthUpperUpLeft", "mouthUpperUpRight", "noseSneerLeft", "noseSneerRight",
+)
+
+
 def serialize_face_sample(sample: FaceSample) -> dict:
-    return {
+    payload = {
         "timestamp_ms": int(sample.timestamp_ms),
         "normalized_landmarks": sample.normalized_landmarks.tolist(),
         "metrics": {key: float(value) for key, value in sample.metrics.items()},
@@ -82,6 +102,19 @@ def serialize_face_sample(sample: FaceSample) -> dict:
         "face_scale_px": float(sample.face_scale_px),
         "face_center_px": [int(sample.face_center_px[0]), int(sample.face_center_px[1])],
     }
+    # Campos de la captura enriquecida; se redondean para que el dataset no crezca de más.
+    if sample.points_precise:
+        payload["points_precise"] = {
+            str(key): [round(float(value[0]), 1), round(float(value[1]), 1)] for key, value in sample.points_precise.items()
+        }
+    if sample.blendshapes:
+        if tuple(sample.blendshapes) == BLENDSHAPE_NAMES:
+            payload["blendshapes"] = [round(float(value), 3) for value in sample.blendshapes.values()]
+        else:
+            payload["blendshapes"] = {key: round(float(value), 3) for key, value in sample.blendshapes.items()}
+    if sample.head_pose is not None:
+        payload["head_pose"] = [round(float(value), 2) for value in sample.head_pose]
+    return payload
 
 
 def deserialize_face_sample(payload: dict) -> FaceSample:
@@ -93,7 +126,20 @@ def deserialize_face_sample(payload: dict) -> FaceSample:
         nose_px=(int(payload["nose_px"][0]), int(payload["nose_px"][1])),
         face_scale_px=float(payload["face_scale_px"]),
         face_center_px=(int(payload["face_center_px"][0]), int(payload["face_center_px"][1])),
+        points_precise={
+            int(key): (float(value[0]), float(value[1])) for key, value in payload.get("points_precise", {}).items()
+        },
+        blendshapes=_deserialize_blendshapes(payload.get("blendshapes")),
+        head_pose=tuple(float(value) for value in payload["head_pose"]) if payload.get("head_pose") else None,
     )
+
+
+def _deserialize_blendshapes(raw) -> dict[str, float]:
+    if not raw:
+        return {}
+    if isinstance(raw, list):
+        return {name: float(value) for name, value in zip(BLENDSHAPE_NAMES, raw)}
+    return {key: float(value) for key, value in raw.items()}
 
 
 def serialize_samples_by_gesture(samples_by_gesture: dict[str, list[FaceSample]]) -> dict:
@@ -149,23 +195,32 @@ class GestureClassifier:
         self.active_version: int | None = None
         self.active_dataset_path = None
 
-    def _split_windows_temporally(self, windows_by_gesture: dict[str, list[np.ndarray]]) -> tuple[list[np.ndarray], list[str], list[np.ndarray], list[str]]:
+    def _split_windows_temporally(
+        self, windows_by_gesture: dict[str, list[np.ndarray]]
+    ) -> tuple[list[np.ndarray], list[str], list[np.ndarray], list[str], list[str]]:
+        """Partición temporal por paso de calibración; las etiquetas usan la clase de entrenamiento.
+
+        Devuelve también, por cada ventana de validación, el paso del que proviene.
+        """
         train_features = []
         train_labels = []
         validation_features = []
         validation_labels = []
+        validation_sources = []
         for gesture_id, windows in windows_by_gesture.items():
+            label = training_label(gesture_id)
             validation_count = 0
             if len(windows) >= 6:
                 validation_count = max(1, int(round(len(windows) * 0.25)))
             train_cutoff = len(windows) - validation_count
             for vector in windows[:train_cutoff]:
                 train_features.append(vector)
-                train_labels.append(gesture_id)
+                train_labels.append(label)
             for vector in windows[train_cutoff:]:
                 validation_features.append(vector)
-                validation_labels.append(gesture_id)
-        return train_features, train_labels, validation_features, validation_labels
+                validation_labels.append(label)
+                validation_sources.append(gesture_id)
+        return train_features, train_labels, validation_features, validation_labels, validation_sources
 
     def _recommended_thresholds(
         self,
@@ -198,6 +253,26 @@ class GestureClassifier:
                 )
                 rejection_rates[str(class_name)] = round(rejected / total_rows, 3)
         return thresholds, rejection_rates
+
+    @staticmethod
+    def _hard_negative_false_alarm_rate(
+        sources: list[str], predicted_labels: np.ndarray, probabilities: np.ndarray, thresholds: dict[str, float]
+    ) -> float | None:
+        """Fracción de ventanas de "neutral en movimiento" que dispararían un gesto.
+
+        Es la estimación más cercana a los falsos positivos en uso real (hablar, mirar).
+        """
+        rows = [index for index, source in enumerate(sources) if source == NEUTRAL_DYNAMIC_ID]
+        if not rows:
+            return None
+        alarms = 0
+        for index in rows:
+            label = str(predicted_labels[index])
+            if label == "neutral":
+                continue
+            if float(np.max(probabilities[index])) >= clamp_confidence_threshold(thresholds.get(label, CONFIDENCE_THRESHOLD_MIN)):
+                alarms += 1
+        return round(alarms / len(rows), 4)
 
     def _load_registry(self) -> dict:
         if not self.registry_path.exists():
@@ -295,13 +370,15 @@ class GestureClassifier:
                 windows_by_gesture[gesture_id].append(self.extractor.extract(window))
                 class_windows[gesture_id] += 1
 
-        labels = sorted(windows_by_gesture.keys())
+        labels = sorted({training_label(gesture_id) for gesture_id in windows_by_gesture})
         if len(labels) < 2:
             raise ValueError("Se necesitan al menos dos clases con muestras suficientes para entrenar.")
         if any(count < 3 for count in class_windows.values()):
             raise ValueError("Cada gesto necesita al menos 3 ventanas útiles para entrenar de forma robusta.")
 
-        train_features, train_labels, validation_features, validation_labels = self._split_windows_temporally(windows_by_gesture)
+        train_features, train_labels, validation_features, validation_labels, validation_sources = (
+            self._split_windows_temporally(windows_by_gesture)
+        )
         if len(set(train_labels)) < 2:
             raise ValueError("Se necesitan al menos dos clases en el conjunto de entrenamiento.")
 
@@ -328,6 +405,7 @@ class GestureClassifier:
         validation_accuracy = None
         validation_report = {}
         confusion = []
+        hard_negative_false_alarm_rate = None
         recommended_thresholds = {label: 0.6 for label in self.labels}
         rejection_rates = {label: 0.0 for label in self.labels}
         if validation_features:
@@ -352,6 +430,9 @@ class GestureClassifier:
                 probabilities,
                 self.model.classes_,
             )
+            hard_negative_false_alarm_rate = self._hard_negative_false_alarm_rate(
+                validation_sources, predicted_labels, probabilities, recommended_thresholds
+            )
 
         self.training_summary = {
             "profile": self.profile_name,
@@ -363,7 +444,12 @@ class GestureClassifier:
             "validation_windows": int(len(validation_features)),
             "training_windows": int(feature_matrix.shape[0] + len(validation_features)),
             "classes": self.labels,
-            "windows_per_class": class_windows,
+            "windows_per_class": {
+                label: sum(count for gesture_id, count in class_windows.items() if training_label(gesture_id) == label)
+                for label in self.labels
+            },
+            "windows_per_step": class_windows,
+            "hard_negative_false_alarm_rate": hard_negative_false_alarm_rate,
             "model_type": "LogisticRegression",
             "model_path": str(self.model_path),
             "dataset_path": str(dataset_path),

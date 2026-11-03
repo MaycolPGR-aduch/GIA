@@ -27,6 +27,11 @@ class FaceSample:
     nose_px: tuple[int, int]
     face_scale_px: float
     face_center_px: tuple[int, int]
+    # Captura enriquecida (datasets nuevos): coordenadas sin redondear, coeficientes de
+    # expresión de MediaPipe y orientación de la cabeza (pitch, yaw, roll en grados).
+    points_precise: dict[int, tuple[float, float]] = field(default_factory=dict)
+    blendshapes: dict[str, float] = field(default_factory=dict)
+    head_pose: tuple[float, float, float] | None = None
 
 
 @dataclass(slots=True)

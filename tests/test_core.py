@@ -29,7 +29,9 @@ from app.voice_router import find_phrase_conflicts, normalize_voice_settings, re
 from app.config_store import CALIBRATION_DIR, get_profile_summary
 from app.ui_theme import PALETTES, build_stylesheet
 from app.audio_utils import pick_fallback_input_device
-from app.gesture_catalog import CONFIDENCE_THRESHOLD_MAX, CONFIDENCE_THRESHOLD_MIN
+from app.gesture_catalog import CONFIDENCE_THRESHOLD_MAX, CONFIDENCE_THRESHOLD_MIN, NEUTRAL_DYNAMIC_ID
+from app.gesture_ml import BLENDSHAPE_NAMES
+from app.landmark_provider import head_pose_from_matrix
 from app.speech import SpeechQueue
 from app.preflight import evaluate_preflight, summarize_preflight
 from app.runtime_app import voice_status
@@ -986,6 +988,71 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(controller._update_click_anchor(), ("left_blink_intent", (10, 20)))
             current["gesture"] = "smile"
             self.assertIsNone(controller._update_click_anchor())
+
+    def test_head_pose_from_matrix(self):
+        self.assertEqual(head_pose_from_matrix(np.eye(4)), (0.0, 0.0, 0.0))
+        angle = np.radians(30)
+        yaw_matrix = np.eye(4)
+        yaw_matrix[:3, :3] = [[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]]
+        pitch, yaw, roll = head_pose_from_matrix(yaw_matrix)
+        self.assertAlmostEqual(yaw, 30.0, places=4)
+        self.assertAlmostEqual(pitch, 0.0, places=4)
+        self.assertIsNone(head_pose_from_matrix("no es una matriz"))
+
+    def test_enriched_sample_roundtrip_and_old_datasets(self):
+        sample = make_sample(5)
+        sample.points_precise = {idx: (x + 0.37, y + 0.81) for idx, (x, y) in sample.points_px.items()}
+        sample.blendshapes = {name: index / 100 for index, name in enumerate(BLENDSHAPE_NAMES)}
+        sample.head_pose = (1.234, -5.678, 0.5)
+        payload = serialize_face_sample(sample)
+        self.assertIsInstance(payload["blendshapes"], list)  # sin repetir los 52 nombres
+        restored = deserialize_face_sample(json.loads(json.dumps(payload)))
+        self.assertAlmostEqual(restored.blendshapes["jawOpen"], sample.blendshapes["jawOpen"], places=3)
+        self.assertEqual(restored.head_pose, (1.23, -5.68, 0.5))
+        first = next(iter(sample.points_precise))
+        self.assertAlmostEqual(restored.points_precise[first][0], sample.points_precise[first][0], places=1)
+
+        old_payload = serialize_face_sample(make_sample(6))
+        self.assertNotIn("blendshapes", old_payload)
+        old = deserialize_face_sample(old_payload)
+        self.assertEqual((old.blendshapes, old.points_precise, old.head_pose), ({}, {}, None))
+
+    def test_calibration_requires_neutral_dynamic_step(self):
+        service = CalibrationService(window_size=4)
+        self.assertEqual(service.gesture_order[:2], ["neutral", NEUTRAL_DYNAMIC_ID])
+        for gesture_id in service.gesture_order:
+            if gesture_id == NEUTRAL_DYNAMIC_ID:
+                continue
+            minimum = service.gesture_meta[gesture_id]["recommended_min_frames"]
+            service.samples_by_gesture[gesture_id] = [make_shifted_sample(i, 0.3) for i in range(minimum)]
+        ready, blockers, _ = service.can_train()
+        self.assertFalse(ready)
+        self.assertEqual(blockers, ["Neutral en movimiento"])
+
+    def test_neutral_dynamic_trains_as_neutral_and_measures_false_alarms(self):
+        profile_name = f"test_dynamic_{uuid.uuid4().hex[:8]}"
+        profile_dir = profile_calibration_dir(profile_name)
+        try:
+            classifier = GestureClassifier(profile_name, window_size=4)
+            samples = {
+                "neutral": [make_sample(i) for i in range(10)],
+                NEUTRAL_DYNAMIC_ID: [make_shifted_sample(i, 0.05) for i in range(10)],
+                "left_blink_intent": [make_shifted_sample(i, 0.4) for i in range(10)],
+            }
+            classifier.fit(samples)
+            summary = classifier.training_summary
+            self.assertEqual(summary["classes"], ["left_blink_intent", "neutral"])
+            self.assertEqual(summary["windows_per_step"][NEUTRAL_DYNAMIC_ID], 7)
+            self.assertEqual(summary["windows_per_class"]["neutral"], 14)
+            self.assertIsNotNone(summary["hard_negative_false_alarm_rate"])
+            self.assertIn(NEUTRAL_DYNAMIC_ID, classifier.load_active_dataset())
+
+            del samples[NEUTRAL_DYNAMIC_ID]
+            classifier.fit(samples)
+            self.assertIsNone(classifier.training_summary["hard_negative_false_alarm_rate"])
+        finally:
+            if profile_dir.exists():
+                rmtree(profile_dir)
 
 if __name__ == "__main__":
     unittest.main()

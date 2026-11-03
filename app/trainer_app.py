@@ -43,7 +43,7 @@ from app.config_store import (
     save_profile,
     save_settings,
 )
-from app.gesture_catalog import GESTURE_CATALOG, NEUTRAL_GESTURE_META, get_enabled_gesture_catalog
+from app.gesture_catalog import GESTURE_CATALOG, NEUTRAL_DYNAMIC_META, NEUTRAL_GESTURE_META, get_enabled_gesture_catalog
 from app.qt_helpers import CameraThread
 from app.training_service import TrainingService
 from app.ui_widgets import (
@@ -79,6 +79,7 @@ READINESS = {
 
 GESTURE_SHORT_TITLES = {gesture["id"]: gesture.get("short_title", gesture["title"]) for gesture in GESTURE_CATALOG}
 GESTURE_SHORT_TITLES["neutral"] = NEUTRAL_GESTURE_META.get("short_title", "Neutral")
+GESTURE_SHORT_TITLES[NEUTRAL_DYNAMIC_META["id"]] = NEUTRAL_DYNAMIC_META["short_title"]
 
 
 class TrainingWorker(QThread):
@@ -434,7 +435,7 @@ class TrainerMainWindow(QMainWindow):
         grid = QGridLayout(content)
         grid.setContentsMargins(0, 0, 4, 0)
         grid.setSpacing(12)
-        gestures = [NEUTRAL_GESTURE_META] + get_enabled_gesture_catalog()
+        gestures = [NEUTRAL_GESTURE_META, NEUTRAL_DYNAMIC_META] + get_enabled_gesture_catalog()
         for index, gesture in enumerate(gestures):
             card = Card(spacing=6)
             header = QHBoxLayout()
@@ -843,10 +844,12 @@ class TrainerMainWindow(QMainWindow):
             self.calib_view.set_overlay_text(str(self.countdown_val))
         else:
             self.countdown_timer.stop()
-            self.calib_view.set_overlay_text("¡Mantén el gesto!", "success")
+            meta = self.calibration_service.gesture_meta.get(self.capture_gesture_id, {})
+            prompt = meta.get("capture_prompt", "¡Mantén el gesto!")
+            self.calib_view.set_overlay_text(prompt, "success")
             QTimer.singleShot(900, lambda: self.calib_view.set_overlay_text(""))
             self.calib_view.set_corner_badge("GRABANDO", "danger")
-            self._set_calib_status("¡Mantén el gesto ahora!", "success")
+            self._set_calib_status(prompt if "capture_prompt" in meta else "¡Mantén el gesto ahora!", "success")
             # Iniciar grabación conectando la captura de muestras
             self.camera_thread.frame_processed.disconnect(self.on_calibration_frame)
             self.camera_thread.frame_processed.connect(self.on_capture_sample_frame)
@@ -884,7 +887,8 @@ class TrainerMainWindow(QMainWindow):
         if status.valid_frames >= minimum:
             self._set_calib_status("✓ Mínimo alcanzado. Puedes detener la captura.", "success")
         else:
-            self._set_calib_status(feedback or "Mantén el gesto…", "" if is_registered else "warning")
+            fallback = meta.get("capture_prompt", "Mantén el gesto…")
+            self._set_calib_status(feedback or fallback, "" if is_registered else "warning")
 
     def stop_capture_and_camera(self):
         if self.camera_thread:
@@ -1061,10 +1065,16 @@ class TrainerMainWindow(QMainWindow):
         labels = [GESTURE_SHORT_TITLES.get(gesture_id, gesture_id) for gesture_id in classes]
         self.confusion_view.set_data(summary.get("confusion_matrix", []), labels)
         trained_at = str(summary.get("trained_at", ""))[:16].replace("T", " ")
+        false_alarms = summary.get("hard_negative_false_alarm_rate")
+        false_alarm_text = (
+            f" · gestos falsos al hablar/moverse: {false_alarms * 100:.1f} %"
+            if false_alarms is not None
+            else " · sin paso «Neutral en movimiento»: recalibra para medir gestos falsos"
+        )
         self.txt_train_results.setText(
             f"Modelo v{summary.get('version', '-')} · entrenado {trained_at} UTC · "
             f"ventana temporal de {summary.get('window_size', '-')} fotogramas · "
-            f"{summary.get('model_type', 'LogisticRegression')} sobre embeddings GRU."
+            f"{summary.get('model_type', 'LogisticRegression')} sobre embeddings GRU{false_alarm_text}."
         )
 
     # -------------------------------------------------------------- cierre
