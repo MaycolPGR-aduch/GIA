@@ -429,6 +429,10 @@ class RuntimeMainWindow(QMainWindow):
         self.btn_pause.clicked.connect(self._toggle_pause)
         self.btn_cursor = Button("Cursor congelado", "cursor", tooltip="Activar o congelar el cursor (Ctrl+K)")
         self.btn_cursor.clicked.connect(self._toggle_cursor)
+        self.btn_precision = Button(
+            "Modo preciso", "target", tooltip="Cursor lento para apuntar a elementos pequeños (Ctrl+L o «modo preciso»)", checkable=True
+        )
+        self.btn_precision.clicked.connect(self._toggle_precision)
         btn_recenter = Button("Recentrar", "target", tooltip="Toma la posición actual de la nariz como centro (Ctrl+R)")
         btn_recenter.clicked.connect(self._recenter)
         btn_compact = Button("Modo compacto", "compact", tooltip="Reduce la interfaz a una barra flotante (Ctrl+M)")
@@ -444,12 +448,13 @@ class RuntimeMainWindow(QMainWindow):
 
         grid.addWidget(self.btn_pause, 0, 0)
         grid.addWidget(self.btn_cursor, 0, 1)
-        grid.addWidget(btn_recenter, 1, 0)
-        grid.addWidget(btn_compact, 1, 1)
-        grid.addWidget(btn_guide, 2, 0)
-        grid.addWidget(btn_voice_guide, 2, 1)
-        grid.addWidget(btn_voice_test, 3, 0)
-        grid.addWidget(btn_close, 3, 1)
+        grid.addWidget(self.btn_precision, 1, 0)
+        grid.addWidget(btn_recenter, 1, 1)
+        grid.addWidget(btn_compact, 2, 0)
+        grid.addWidget(btn_guide, 2, 1)
+        grid.addWidget(btn_voice_guide, 3, 0)
+        grid.addWidget(btn_voice_test, 3, 1)
+        grid.addWidget(btn_close, 4, 0, 1, 2)
         card.body.addLayout(grid)
         return card
 
@@ -499,6 +504,7 @@ class RuntimeMainWindow(QMainWindow):
         bindings = [
             ("Ctrl+P", self._toggle_pause),
             ("Ctrl+K", self._toggle_cursor),
+            ("Ctrl+L", self._toggle_precision),
             ("Ctrl+R", self._recenter),
             ("Ctrl+T", self.show_preflight_dialog),
             ("Ctrl+M", self._toggle_compact),
@@ -563,13 +569,15 @@ class RuntimeMainWindow(QMainWindow):
         self.status_badge.set_status(status_text, status_tone, pulse)
         cursor_active = payload.get("cursor_active", payload.get("cursor") == "activo")
         cursor_text, cursor_tone = ("Cursor activo", "success") if cursor_active else ("Cursor congelado", "neutral")
+        if cursor_active and payload.get("precision_mode"):
+            cursor_text = "Cursor preciso"
         self.cursor_badge.set_status(cursor_text, cursor_tone)
 
         gesture_id = payload.get("gesture", "-")
         if payload.get("gesture_executed"):
             self._show_executed_gesture(gesture_id, payload)
         elif payload.get("runtime_state") == "validando gesto":
-            self.gesture_strip.set_candidate(gesture_id)
+            self.gesture_strip.set_candidate(gesture_id, payload.get("hold_progress", 0.0))
         else:
             self.gesture_strip.set_candidate(None)
 
@@ -665,6 +673,11 @@ class RuntimeMainWindow(QMainWindow):
                 self.btn_pause.set_icon_name("pause")
                 self.btn_pause.set_variant("primary")
 
+        precision = bool(payload.get("precision_mode"))
+        if self.btn_precision.isChecked() != precision:
+            self.btn_precision.setChecked(precision)
+            self.btn_precision.setText("Modo preciso: sí" if precision else "Modo preciso")
+
         if cursor_active != self._last_cursor:
             self._last_cursor = cursor_active
             if cursor_active:
@@ -729,8 +742,9 @@ class RuntimeMainWindow(QMainWindow):
         dialog, layout = self._build_help_dialog("GIA · Guía rápida", (760, 640))
         layout.addWidget(make_label("Guía rápida de interacción", role="title"))
         layout.addWidget(make_label(
-            "Mantén cada gesto el tiempo indicado. Las fichas bajo la cámara se iluminan en verde cuando "
-            "un gesto se ejecuta.",
+            "Mantén cada gesto hasta que se llene la barra de su ficha; la ficha se ilumina en verde cuando "
+            "el gesto se ejecuta. Para hacer clic con el cursor activo, primero detenlo llevando la cabeza "
+            "al centro: el cursor se congela durante el guiño y el clic cae donde empezaste.",
             role="muted",
             wrap=True,
         ))
@@ -756,6 +770,7 @@ class RuntimeMainWindow(QMainWindow):
             ("Ctrl+P", "Pausar / reanudar"),
             ("Ctrl+Alt+P", "Pausa de emergencia (en cualquier app)"),
             ("Ctrl+K", "Activar / congelar cursor"),
+            ("Ctrl+L", "Modo preciso (cursor lento)"),
             ("Ctrl+R", "Recentrar cursor"),
             ("Ctrl+T", "Verificación del sistema"),
             ("Ctrl+M", "Modo compacto"),
@@ -923,6 +938,10 @@ class RuntimeMainWindow(QMainWindow):
     def _toggle_cursor(self):
         if self.controller:
             self.controller.toggle_cursor_control()
+
+    def _toggle_precision(self):
+        if self.controller and hasattr(self.controller, "toggle_precision_mode"):
+            self.controller.toggle_precision_mode()
 
     def _toggle_camera_metrics(self, checked):
         if self.controller:

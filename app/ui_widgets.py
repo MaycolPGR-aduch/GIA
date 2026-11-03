@@ -499,6 +499,7 @@ class GestureChip(QWidget):
         self._action = action
         self._glow = 0.0
         self._candidate = False
+        self._progress = 0.0
         self._anim = QVariantAnimation(self)
         self._anim.setDuration(1600)
         self._anim.setStartValue(1.0)
@@ -524,16 +525,19 @@ class GestureChip(QWidget):
         self.update()
         self._anim.start()
 
-    def set_candidate(self, active: bool) -> None:
-        if active != self._candidate:
+    def set_candidate(self, active: bool, progress: float = 0.0) -> None:
+        """Marca el gesto que se está sosteniendo y cuánto de la duración mínima lleva."""
+        progress = min(max(float(progress), 0.0), 1.0) if active else 0.0
+        if active != self._candidate or abs(progress - self._progress) > 0.01:
             self._candidate = active
+            self._progress = progress
             self.update()
 
     def sizeHint(self) -> QSize:
         title_fm = QFontMetrics(theme.font("body", bold=True))
         action_fm = QFontMetrics(theme.font("small"))
         width = max(title_fm.horizontalAdvance(self._title), action_fm.horizontalAdvance(self._action)) + 28
-        height = title_fm.height() + action_fm.height() + 20
+        height = title_fm.height() + action_fm.height() + 26  # incluye la barra de progreso
         return QSize(max(120, width), height)
 
     def minimumSizeHint(self) -> QSize:
@@ -565,6 +569,16 @@ class GestureChip(QWidget):
         painter.setPen(QPen(border, border_w))
         painter.setBrush(fill)
         painter.drawRoundedRect(rect, 12, 12)
+
+        if self._candidate and glow <= 0.02:
+            # Barra de progreso de la duración mínima, pegada al borde inferior.
+            track = QRectF(rect.left() + 10, rect.bottom() - 7, rect.width() - 20, 4)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(palette["border"]))
+            painter.drawRoundedRect(track, 2, 2)
+            if self._progress > 0:
+                painter.setBrush(QColor(palette["accent"]))
+                painter.drawRoundedRect(QRectF(track.left(), track.top(), track.width() * self._progress, track.height()), 2, 2)
 
         dark_text = glow > 0.5
         title_color = QColor("#04210f") if dark_text else QColor(palette["text"])
@@ -614,14 +628,12 @@ class GestureStrip(QWidget):
         chip.flash()
         return True
 
-    def set_candidate(self, gesture_id: str | None) -> None:
-        if gesture_id == self._candidate:
-            return
-        if self._candidate in self.chips:
+    def set_candidate(self, gesture_id: str | None, progress: float = 0.0) -> None:
+        if gesture_id != self._candidate and self._candidate in self.chips:
             self.chips[self._candidate].set_candidate(False)
         self._candidate = gesture_id if gesture_id in self.chips else None
         if self._candidate:
-            self.chips[self._candidate].set_candidate(True)
+            self.chips[self._candidate].set_candidate(True, progress)
 
 
 # --------------------------------------------------------------------------

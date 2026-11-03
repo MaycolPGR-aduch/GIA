@@ -91,6 +91,7 @@ class HeuristicEngine:
             cursor_dy=target_speed_y,
             smoothed_dx=smoothed_speed_x,
             smoothed_dy=smoothed_speed_y,
+            steering=max(abs(norm_x), abs(norm_y)) > self._fine_zone_limit(),
             status_text=status,
             debug_metrics=debug_metrics,
         )
@@ -98,11 +99,17 @@ class HeuristicEngine:
     def _dead_zone_ratio(self, face_scale_px: float) -> float:
         return max(self.dead_zone_px / max(face_scale_px, 1.0), 0.045)
 
+    def _axis_dead_zone(self) -> float:
+        return max(self.dead_zone_px / 140.0, 0.045)
+
+    def _fine_zone_limit(self) -> float:
+        return self._axis_dead_zone() + 0.06
+
     def _map_axis_to_speed(self, axis_value: float) -> float:
         sign = -1.0 if axis_value < 0 else 1.0
         magnitude = abs(axis_value)
-        dead_zone = max(self.dead_zone_px / 140.0, 0.045)
-        fine_zone = dead_zone + 0.06
+        dead_zone = self._axis_dead_zone()
+        fine_zone = self._fine_zone_limit()
         medium_zone = dead_zone + 0.17
         high_zone = dead_zone + 0.32
 

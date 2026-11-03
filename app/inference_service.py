@@ -10,6 +10,9 @@ from .models import AppState, FaceSample, GestureInferenceResult, GesturePredict
 # Hueco máximo (≈3 fotogramas a 15 FPS) sin una predicción confiable del mismo gesto antes
 # de reiniciar el conteo de duración: "sostener N ms" exige sostenerlo de forma continua.
 GESTURE_CONTINUITY_GAP_S = 0.25
+# Gestos que actúan en la posición del cursor (o en la ventana activa): con el cursor
+# activo solo se aceptan con la cabeza cerca del centro, es decir, con el cursor detenido.
+CLICK_GESTURES = {"left_blink_intent", "right_blink_intent", "confirm"}
 
 
 class InferenceService:
@@ -37,6 +40,7 @@ class InferenceService:
         app_state: AppState,
         cursor_label: str,
         allow_low_confidence: bool = False,
+        cursor_active: bool = False,
     ) -> GestureInferenceResult:
         if sample is None:
             self.current_gesture = None
@@ -97,6 +101,16 @@ class InferenceService:
                 should_log=False,
             )
 
+        if cursor_active and getattr(control_state, "steering", False) and prediction.gesture_id in CLICK_GESTURES:
+            return self._reject(
+                prediction,
+                "Cursor en movimiento",
+                "Detén el cursor (cabeza al centro) para hacer clic.",
+                app_state,
+                cursor_label,
+                should_log=True,
+            )
+
         threshold = clamp_confidence_threshold(self.gesture_thresholds.get(prediction.gesture_id, 0.6))
         now = time.monotonic()
 
@@ -139,7 +153,8 @@ class InferenceService:
             )
 
         required_duration = self.gesture_durations.get(prediction.gesture_id, 700) / 1000.0
-        if now - self.current_gesture_started_at < required_duration:
+        held = now - self.current_gesture_started_at
+        if held < required_duration:
             return GestureInferenceResult(
                 prediction=prediction,
                 status_text="Gesto detectado. Esperando duración mínima...",
@@ -149,6 +164,7 @@ class InferenceService:
                 runtime_state="validando gesto",
                 rejection_reason="duracion insuficiente",
                 diagnostic_hint="Mantén el gesto un poco más para evitar falsos positivos.",
+                hold_progress=min(held / required_duration, 1.0) if required_duration > 0 else 1.0,
             )
 
         cooldown = self.gesture_cooldowns.get(prediction.gesture_id, 1500) / 1000.0
@@ -188,7 +204,17 @@ class InferenceService:
             executed=True,
             should_log=True,
             diagnostic_hint="El gesto superó confianza, duración y cooldown.",
+            hold_progress=1.0,
         )
+
+    def gesture_in_progress(self, now: float | None = None) -> str | None:
+        """Gesto que se está sosteniendo ahora mismo (con predicciones confiables recientes)."""
+        if self.current_gesture is None:
+            return None
+        now = time.monotonic() if now is None else now
+        if now - self.current_gesture_last_seen_at > GESTURE_CONTINUITY_GAP_S:
+            return None
+        return self.current_gesture
 
     def _reject(
         self,

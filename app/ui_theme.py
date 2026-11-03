@@ -233,6 +233,9 @@ QPushButton:focus, QToolButton:focus {{ border: {max(bw, 2)}px solid {p['focus']
 QPushButton:disabled, QToolButton:disabled {{
     color: {p['text_subtle']}; background-color: {p['surface']}; border-color: {p['border']};
 }}
+QPushButton:checked {{
+    background-color: {p['surface_hover']}; border: {max(bw, 2)}px solid {p['accent']}; color: {p['accent']};
+}}
 QPushButton[variant="primary"] {{
     background-color: {p['accent']}; border-color: {p['accent']}; color: {p['on_accent']};
 }}

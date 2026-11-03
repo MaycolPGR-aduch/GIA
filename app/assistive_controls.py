@@ -15,7 +15,7 @@ from .action_service import ActionService
 from .audio_utils import AudioLevelMonitor, capture_voice_clip, friendly_audio_error, save_audio_clip
 from .config_store import parse_camera_resolution
 from .gesture_catalog import GESTURE_CATALOG, clamp_confidence_threshold
-from .gesture_ml import GestureClassifier
+from .gesture_ml import GestureClassifier, ProbabilitySmoother
 from .global_hotkey import EMERGENCY_HOTKEY_LABEL, GlobalHotkey
 from .heuristic_engine import HeuristicEngine
 from .inference_service import InferenceService
@@ -33,6 +33,12 @@ STATUS_PUSH_INTERVAL_S = 0.1
 # Lecturas fallidas seguidas (~1 s a 15 FPS) antes de dar la cámara por perdida.
 CAMERA_MAX_READ_FAILURES = 15
 CAMERA_RETRY_INTERVAL_S = 2.0
+# Las velocidades del cursor del perfil están ajustadas a 15 FPS; se escalan por el tiempo
+# real entre fotogramas para que la velocidad no dependa de los FPS.
+REFERENCE_CURSOR_FPS = 15.0
+PRECISION_SPEED_FACTOR = 0.35
+# Gestos que hacen clic en la posición del cursor: lo congelan mientras se validan.
+POSITIONAL_GESTURES = {"left_blink_intent", "right_blink_intent"}
 GESTURE_LABELS = {
     gesture["id"]: (gesture.get("short_title", gesture["title"]), gesture.get("short_action", gesture["action"]))
     for gesture in GESTURE_CATALOG
@@ -68,6 +74,12 @@ class AssistiveController:
         pyautogui.FAILSAFE = False
         self.screen_width, self.screen_height = pyautogui.size()
         self.current_cursor_x, self.current_cursor_y = pyautogui.position()
+        # Posición en coma flotante para no perder los desplazamientos de menos de 1 px.
+        self._cursor_fx, self._cursor_fy = float(self.current_cursor_x), float(self.current_cursor_y)
+        self.precision_mode = False
+        self._frame_dt = None
+        self._click_anchor = None
+        self.prediction_smoother = ProbabilitySmoother(float(settings.get("gesture_smoothing_alpha", 0.5)))
         self.cursor_active = bool(profile.get("cursor_starts_active", False))
         self.mirror_preview = bool(profile.get("mirror_preview", True))
 
@@ -99,6 +111,7 @@ class AssistiveController:
             on_quit=self._quit_from_action,
             main_gui_interface=self.main_gui_interface,
             audio_endpoint=self.audio_endpoint,
+            on_set_precision=self.set_precision_mode,
         )
 
         self.emergency_hotkey = GlobalHotkey(self._emergency_toggle_pause)
@@ -265,6 +278,16 @@ class AssistiveController:
         self.logger.log("cursor", "Cursor configurado", cursor_active=self.cursor_active)
         self.hablar("Cursor activado." if self.cursor_active else "Cursor congelado.")
 
+    def set_precision_mode(self, enabled: bool):
+        if self.precision_mode == enabled:
+            return
+        self.precision_mode = enabled
+        self.logger.log("cursor", "Modo preciso", precision_mode=enabled)
+        self.hablar("Modo preciso activado." if enabled else "Velocidad normal.")
+
+    def toggle_precision_mode(self):
+        self.set_precision_mode(not self.precision_mode)
+
     def set_camera_overlay_details(self, enabled: bool):
         self.show_camera_overlay_details = bool(enabled)
 
@@ -384,6 +407,7 @@ class AssistiveController:
         delta = now - last
         if delta <= 0:
             return
+        self._frame_dt = delta
         instant = 1.0 / delta
         current = getattr(self, "fps_real", 0.0) or instant
         self.fps_real = current * 0.9 + instant * 0.1
@@ -400,7 +424,9 @@ class AssistiveController:
     def _evaluate_gesture(self, sample: FaceSample | None, control_state):
         if sample is not None:
             self.inference.append_sample(sample)
-        prediction = self.classifier.predict(self.inference.gesture_window)
+        else:
+            self.prediction_smoother.reset()
+        prediction = self.classifier.predict(self.inference.gesture_window, smoother=self.prediction_smoother)
         heuristic_prediction = self._build_heuristic_blink_prediction(sample)
         if self._should_use_heuristic_blink(prediction, heuristic_prediction):
             prediction = heuristic_prediction
@@ -413,12 +439,15 @@ class AssistiveController:
             self.state,
             self._cursor_status_text(),
             allow_low_confidence=allow_low_confidence,
+            cursor_active=self.cursor_active,
         )
         self.last_rejection_reason = result.rejection_reason or "-"
         self.last_diagnostic_hint = result.diagnostic_hint or "-"
 
+        anchor = self._update_click_anchor()
         if result.executed and result.prediction is not None:
-            self.action_service.execute_gesture_action(result.prediction.gesture_id, self.state.value)
+            position = anchor[1] if anchor and anchor[0] == result.prediction.gesture_id else None
+            self.action_service.execute_gesture_action(result.prediction.gesture_id, self.state.value, position=position)
             self.logger.log(
                 "gesture",
                 "Gesto aceptado",
@@ -450,17 +479,35 @@ class AssistiveController:
             diagnostic_hint=result.diagnostic_hint,
             runtime_state=result.runtime_state,
             gesture_executed=bool(result.executed),
+            hold_progress=result.hold_progress,
             throttle=not result.executed,
         )
         return prediction, result
 
+    def _update_click_anchor(self):
+        """Guarda dónde estaba el cursor al empezar un guiño: el clic se hace ahí."""
+        gesture_id = self.inference.gesture_in_progress()
+        if gesture_id not in POSITIONAL_GESTURES:
+            self._click_anchor = None
+        elif self._click_anchor is None or self._click_anchor[0] != gesture_id:
+            self._click_anchor = (gesture_id, tuple(pyautogui.position()))
+        return self._click_anchor
+
     def _apply_continuous_control(self, control_state):
         if self.state != AppState.READY or not control_state.face_present or not self.cursor_active:
             return
-        if abs(control_state.smoothed_dx) < 0.5 and abs(control_state.smoothed_dy) < 0.5:
+        if self._click_anchor is not None:
+            return  # cursor congelado mientras se valida un guiño
+        frame_dt = self._frame_dt or (1.0 / REFERENCE_CURSOR_FPS)
+        scale = float(np.clip(frame_dt * REFERENCE_CURSOR_FPS, 0.5, 2.0))
+        if self.precision_mode:
+            scale *= PRECISION_SPEED_FACTOR
+        self._cursor_fx = float(np.clip(self._cursor_fx + control_state.smoothed_dx * scale, 0, self.screen_width - 1))
+        self._cursor_fy = float(np.clip(self._cursor_fy + control_state.smoothed_dy * scale, 0, self.screen_height - 1))
+        target_x, target_y = int(round(self._cursor_fx)), int(round(self._cursor_fy))
+        if (target_x, target_y) == (self.current_cursor_x, self.current_cursor_y):
             return
-        self.current_cursor_x = int(np.clip(self.current_cursor_x + control_state.smoothed_dx, 0, self.screen_width - 1))
-        self.current_cursor_y = int(np.clip(self.current_cursor_y + control_state.smoothed_dy, 0, self.screen_height - 1))
+        self.current_cursor_x, self.current_cursor_y = target_x, target_y
         pyautogui.moveTo(self.current_cursor_x, self.current_cursor_y, duration=0)
 
     def start_manual_voice_test(self):
@@ -849,6 +896,7 @@ class AssistiveController:
         diagnostic_hint=None,
         runtime_state=None,
         gesture_executed=False,
+        hold_progress=0.0,
     ) -> dict:
         mic_payload = self._get_mic_status_payload()
         gesture_title, gesture_action = GESTURE_LABELS.get(gesture, (gesture, "")) if gesture else ("-", "")
@@ -873,6 +921,8 @@ class AssistiveController:
             "diagnostic_hint": diagnostic_hint if diagnostic_hint is not None else self.last_diagnostic_hint,
             "model_version": self.classifier.active_version if self.classifier.active_version is not None else "-",
             "fps_real": round(float(getattr(self, "fps_real", 0.0) or 0.0), 1),
+            "hold_progress": round(float(hold_progress or 0.0), 3),
+            "precision_mode": bool(getattr(self, "precision_mode", False)),
             "voice_model_state": getattr(self, "voice_model_state", "lista"),
             **mic_payload,
         }

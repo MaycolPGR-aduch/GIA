@@ -37,6 +37,8 @@ class ContinuousControlState:
     cursor_dy: float = 0.0
     smoothed_dx: float = 0.0
     smoothed_dy: float = 0.0
+    # La cabeza está fuera de la zona fina: el cursor se está desplazando (modo joystick).
+    steering: bool = False
     status_text: str = "Sin rostro"
     debug_metrics: dict[str, float] = field(default_factory=dict)
 
@@ -78,6 +80,8 @@ class GestureInferenceResult:
     executed: bool = False
     should_log: bool = False
     diagnostic_hint: str = ""
+    # Fracción (0-1) de la duración mínima ya sostenida por el gesto en validación.
+    hold_progress: float = 0.0
 
 
 @dataclass(slots=True)

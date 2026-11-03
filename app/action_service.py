@@ -20,6 +20,7 @@ class ActionService:
         on_quit,
         main_gui_interface,
         audio_endpoint,
+        on_set_precision=None,
     ):
         self.logger = logger
         self.on_voice_listener = on_voice_listener
@@ -27,15 +28,18 @@ class ActionService:
         self.on_recenter = on_recenter
         self.on_toggle_pause = on_toggle_pause
         self.on_set_cursor = on_set_cursor
+        self.on_set_precision = on_set_precision
         self.on_quit = on_quit
         self.main_gui_interface = main_gui_interface
         self.audio_endpoint = audio_endpoint
 
-    def execute_gesture_action(self, gesture_id: str, app_state) -> None:
+    def execute_gesture_action(self, gesture_id: str, app_state, position: tuple[int, int] | None = None) -> None:
+        """Ejecuta la acción del gesto; los clics van a ``position`` si se indica."""
+        where = {"x": int(position[0]), "y": int(position[1])} if position is not None else {}
         if gesture_id == "left_blink_intent" and app_state == "ready":
-            pyautogui.click()
+            pyautogui.click(**where)
         elif gesture_id == "right_blink_intent" and app_state == "ready":
-            pyautogui.click(button="right")
+            pyautogui.click(button="right", **where)
         elif gesture_id == "both_eyes_closed_intent":
             self.on_voice_listener()
         elif gesture_id == "mouth_open_hold":
@@ -82,6 +86,8 @@ class ActionService:
             self.on_set_cursor(True)
         elif direct_action_id == "cursor_off":
             self.on_set_cursor(False)
+        elif direct_action_id in ("precision_on", "precision_off") and self.on_set_precision:
+            self.on_set_precision(direct_action_id == "precision_on")
         elif direct_action_id == "guide" and self.main_gui_interface:
             self.main_gui_interface.show_guide_dialog()
         elif direct_action_id == "compact_ui" and self.main_gui_interface:

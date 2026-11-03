@@ -110,6 +110,29 @@ def deserialize_samples_by_gesture(payload: dict) -> dict[str, list[FaceSample]]
     }
 
 
+class ProbabilitySmoother:
+    """Promedio móvil exponencial de las probabilidades entre fotogramas.
+
+    Evita que la confianza salte de un fotograma a otro; con alpha=0.5 añade unos
+    dos fotogramas de latencia, muy por debajo de la duración mínima de los gestos.
+    """
+
+    def __init__(self, alpha: float = 0.5):
+        self.alpha = min(max(float(alpha), 0.0), 0.95)
+        self._state: np.ndarray | None = None
+
+    def reset(self) -> None:
+        self._state = None
+
+    def update(self, probabilities: np.ndarray) -> np.ndarray:
+        current = np.asarray(probabilities, dtype=np.float64)
+        if self._state is None or self._state.shape != current.shape:
+            self._state = current.copy()
+        else:
+            self._state = self.alpha * self._state + (1.0 - self.alpha) * current
+        return self._state
+
+
 class GestureClassifier:
     def __init__(self, profile_name: str, window_size: int = 12):
         self.profile_name = profile_name
@@ -405,12 +428,14 @@ class GestureClassifier:
             except Exception:
                 pass
 
-    def predict(self, window: deque[FaceSample]) -> GesturePrediction | None:
+    def predict(self, window: deque[FaceSample], smoother: ProbabilitySmoother | None = None) -> GesturePrediction | None:
         if self.model is None or len(window) < self.window_size:
             return None
 
         vector = self.extractor.extract(list(window))
         probabilities = self.model.predict_proba(vector.reshape(1, -1))[0]
+        if smoother is not None:
+            probabilities = smoother.update(probabilities)
         best_index = int(np.argmax(probabilities))
         gesture_id = self.model.classes_[best_index]
         confidence = float(probabilities[best_index])

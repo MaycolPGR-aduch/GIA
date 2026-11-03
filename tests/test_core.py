@@ -17,6 +17,7 @@ from app.calibration_service import CalibrationService
 from app.config_store import build_default_profile, load_profile, load_settings, profile_calibration_dir, save_profile
 from app.gesture_ml import (
     GestureClassifier,
+    ProbabilitySmoother,
     GestureFeatureExtractor,
     deserialize_face_sample,
     serialize_face_sample,
@@ -851,6 +852,140 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(controller.camera_state, "ok")
         self.assertEqual(controller.state, AppState.PAUSED)
         self.assertIn("Cámara reconectada.", events)
+
+    def _make_action_service(self, **overrides):
+        kwargs = dict(
+            on_voice_listener=lambda: None,
+            on_toggle_cursor=lambda: None,
+            on_recenter=lambda: None,
+            on_toggle_pause=lambda: None,
+            on_set_cursor=lambda value: None,
+            on_quit=lambda: None,
+            main_gui_interface=None,
+            audio_endpoint=None,
+        )
+        kwargs.update(overrides)
+        return ActionService(type("Logger", (), {"log": lambda self, *args, **kwargs: None})(), **kwargs)
+
+    def test_heuristic_engine_reports_steering_outside_fine_zone(self):
+        profile = build_default_profile("steering")
+        profile["neutral_nose"] = [100.0, 100.0]
+        engine = HeuristicEngine(profile)
+        centered = make_sample(1)
+        centered.nose_px = (101, 100)
+        centered.face_scale_px = 200.0
+        self.assertFalse(engine.update(centered).steering)
+        turned = make_sample(2)
+        turned.nose_px = (140, 100)  # 0.20 del ancho de la cara
+        turned.face_scale_px = 200.0
+        self.assertTrue(engine.update(turned).steering)
+
+    def test_click_gestures_require_stopped_cursor(self):
+        profile = build_default_profile("click_gate")
+        service = InferenceService(profile, window_size=4)
+        steering = type("State", (), {"face_stable": True, "status_text": "ok", "steering": True})()
+        wink = GesturePrediction("left_blink_intent", 0.95, False)
+        result = service.evaluate(make_sample(1), steering, wink, AppState.READY, "activo", cursor_active=True)
+        self.assertEqual(result.rejection_reason, "cursor en movimiento")
+        # Con el cursor congelado (clutch apagado) el guiño sí se valida.
+        result = service.evaluate(make_sample(1), steering, wink, AppState.READY, "congelado", cursor_active=False)
+        self.assertEqual(result.runtime_state, "validando gesto")
+        # Los gestos que no hacen clic no se bloquean al mover el cursor.
+        smile = GesturePrediction("smile", 0.95, False)
+        result = service.evaluate(make_sample(1), steering, smile, AppState.READY, "activo", cursor_active=True)
+        self.assertEqual(result.runtime_state, "validando gesto")
+
+    def test_inference_reports_hold_progress_and_gesture_in_progress(self):
+        profile = build_default_profile("progress")
+        profile["gesture_confidence"]["smile"] = 0.6
+        profile["gesture_duration_ms"]["smile"] = 600
+        results = self._run_smile_sequence(profile, [(0.0, 0.9), (0.15, 0.9), (0.30, 0.9), (0.45, 0.9), (0.61, 0.9)])
+        progress = [round(result.hold_progress, 2) for result in results]
+        self.assertEqual(progress, [0.0, 0.25, 0.5, 0.75, 1.0])
+        self.assertTrue(results[-1].executed)
+
+        service = InferenceService(profile, window_size=4)
+        state = type("State", (), {"face_stable": True, "status_text": "ok"})()
+        service.evaluate(make_sample(1), state, GesturePrediction("smile", 0.9, False), AppState.READY, "activo")
+        self.assertEqual(service.gesture_in_progress(), "smile")
+        self.assertIsNone(service.gesture_in_progress(time.monotonic() + 1.0))
+
+    def test_probability_smoother_damps_single_frame_spikes(self):
+        smoother = ProbabilitySmoother(alpha=0.5)
+        smoother.update(np.array([0.9, 0.1]))
+        spike = smoother.update(np.array([0.1, 0.9]))
+        self.assertAlmostEqual(spike[1], 0.5)
+        smoother.reset()
+        self.assertAlmostEqual(smoother.update(np.array([0.1, 0.9]))[1], 0.9)
+
+    def test_clicks_land_on_given_position(self):
+        service = self._make_action_service()
+        clicks = []
+        with mock.patch.object(action_service_module.pyautogui, "click", lambda **kwargs: clicks.append(kwargs)):
+            service.execute_gesture_action("left_blink_intent", "ready", position=(120, 340))
+            service.execute_gesture_action("right_blink_intent", "ready")
+        self.assertEqual(clicks, [{"x": 120, "y": 340}, {"button": "right"}])
+
+    def test_precision_voice_commands_toggle_precision(self):
+        calls = []
+        service = self._make_action_service(on_set_precision=calls.append)
+        service.execute_direct_action("precision_on", "ready")
+        service.execute_direct_action("precision_off", "ready")
+        self.assertEqual(calls, [True, False])
+        self.assertEqual(resolve_command_entry("modo preciso", normalize_voice_settings({}))[0]["id"], "precision_on")
+
+    def _cursor_controller(self):
+        controller = AssistiveController.__new__(AssistiveController)
+        controller.state = AppState.READY
+        controller.cursor_active = True
+        controller.precision_mode = False
+        controller._click_anchor = None
+        controller.screen_width, controller.screen_height = 1920, 1080
+        controller.current_cursor_x, controller.current_cursor_y = 500, 500
+        controller._cursor_fx, controller._cursor_fy = 500.0, 500.0
+        return controller
+
+    def _drive_cursor(self, controller, dx, frames, fps):
+        controller._frame_dt = 1.0 / fps
+        state = type("State", (), {"face_present": True, "smoothed_dx": dx, "smoothed_dy": 0.0})()
+        moves = []
+        with mock.patch.object(assistive_controls_module.pyautogui, "moveTo", lambda x, y, duration=0: moves.append((x, y))):
+            for _ in range(frames):
+                controller._apply_continuous_control(state)
+        return moves
+
+    def test_cursor_speed_is_fps_independent_and_subpixel(self):
+        at_15 = self._cursor_controller()
+        self._drive_cursor(at_15, 10.0, 15, fps=15)  # 1 s a 15 FPS
+        at_10 = self._cursor_controller()
+        self._drive_cursor(at_10, 10.0, 10, fps=10)  # 1 s a 10 FPS
+        self.assertEqual(at_15.current_cursor_x, 650)
+        self.assertEqual(at_10.current_cursor_x, 650)
+        # 0,3 px por fotograma: antes se perdía por el redondeo; ahora avanza 3 px en 10 fotogramas.
+        slow = self._cursor_controller()
+        self._drive_cursor(slow, 0.3, 10, fps=15)
+        self.assertEqual(slow.current_cursor_x, 503)
+
+    def test_precision_mode_slows_cursor_and_wink_freezes_it(self):
+        precise = self._cursor_controller()
+        precise.precision_mode = True
+        self._drive_cursor(precise, 10.0, 15, fps=15)
+        self.assertAlmostEqual(precise._cursor_fx, 552.5)  # 150 px * 0.35
+        frozen = self._cursor_controller()
+        frozen._click_anchor = ("left_blink_intent", (500, 500))
+        self.assertEqual(self._drive_cursor(frozen, 10.0, 5, fps=15), [])
+
+    def test_click_anchor_follows_wink_in_progress(self):
+        controller = AssistiveController.__new__(AssistiveController)
+        controller._click_anchor = None
+        current = {"gesture": "left_blink_intent"}
+        controller.inference = type("Inference", (), {"gesture_in_progress": lambda self: current["gesture"]})()
+        positions = iter([(10, 20), (99, 99)])
+        with mock.patch.object(assistive_controls_module.pyautogui, "position", lambda: next(positions)):
+            self.assertEqual(controller._update_click_anchor(), ("left_blink_intent", (10, 20)))
+            self.assertEqual(controller._update_click_anchor(), ("left_blink_intent", (10, 20)))
+            current["gesture"] = "smile"
+            self.assertIsNone(controller._update_click_anchor())
 
 if __name__ == "__main__":
     unittest.main()

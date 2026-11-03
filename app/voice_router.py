@@ -43,6 +43,20 @@ BUILTIN_COMMAND_SPECS = [
         "direct_action_id": "cursor_off",
     },
     {
+        "id": "precision_on",
+        "label": "Modo preciso",
+        "description": "Reduce la velocidad del cursor para apuntar a elementos pequeños.",
+        "default_phrases": ["modo preciso", "cursor preciso", "modo lento", "cursor lento"],
+        "direct_action_id": "precision_on",
+    },
+    {
+        "id": "precision_off",
+        "label": "Velocidad normal",
+        "description": "Devuelve el cursor a su velocidad normal.",
+        "default_phrases": ["velocidad normal", "modo normal", "cursor normal", "cursor rapido"],
+        "direct_action_id": "precision_off",
+    },
+    {
         "id": "guide",
         "label": "Abrir guía",
         "description": "Muestra la guía rápida de gestos.",
