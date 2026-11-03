@@ -43,6 +43,7 @@ from app.config_store import (
     save_profile,
     save_settings,
 )
+from app.gesture_ml import FEATURE_VERSION
 from app.gesture_catalog import GESTURE_CATALOG, NEUTRAL_DYNAMIC_META, NEUTRAL_GESTURE_META, get_enabled_gesture_catalog
 from app.qt_helpers import CameraThread
 from app.training_service import TrainingService
@@ -510,6 +511,13 @@ class TrainerMainWindow(QMainWindow):
         texts.addWidget(self.lbl_train_title)
         texts.addWidget(self.txt_train_status)
         action_row.addLayout(texts, 1)
+        self.btn_upgrade = Button(
+            "Actualizar modelo", "refresh", size="large",
+            tooltip="Reentrena con los datos ya guardados usando el modelo nuevo; no hace falta recalibrar",
+        )
+        self.btn_upgrade.clicked.connect(self.run_model_upgrade)
+        self.btn_upgrade.setVisible(False)
+        action_row.addWidget(self.btn_upgrade)
         self.btn_train = Button("Entrenar modelo", "chip", variant="primary", size="large")
         self.btn_train.clicked.connect(self.run_training)
         action_row.addWidget(self.btn_train)
@@ -608,6 +616,7 @@ class TrainerMainWindow(QMainWindow):
             self._show_training_summary(self.training_service.classifier.training_summary)
         else:
             self._clear_training_results()
+        self._refresh_upgrade_button()
         self._update_train_status()
         self._refresh_step_icons()
         self._go_to_step(STEP_DIAGNOSTICS)
@@ -975,13 +984,29 @@ class TrainerMainWindow(QMainWindow):
             )
             return
 
+        self._training_is_upgrade = False
+        self._start_training(self.calibration_service.export_samples(), self.calibration_service.export_capture_quality())
+
+    def run_model_upgrade(self):
+        """Reentrena con el dataset guardado, sin tocar las capturas pendientes del perfil."""
+        if not self.training_service or self.training_worker is not None:
+            return
+        samples = self.training_service.load_active_dataset()
+        if not samples:
+            QMessageBox.warning(
+                self, "No se puede actualizar", "Este perfil no tiene un dataset guardado. Hay que calibrarlo."
+            )
+            return
+        self._training_is_upgrade = True
+        self._start_training(samples, self.profile.get("calibration", {}).get("capture_quality") or {})
+
+    def _start_training(self, samples: dict, quality: dict):
         self.btn_train.setEnabled(False)
+        self.btn_upgrade.setEnabled(False)
         self.train_busy.setVisible(True)
         self.txt_train_status.setText("Entrenando el clasificador… la interfaz sigue disponible.")
         theme.set_widget_property(self.txt_train_status, "tone", "info")
 
-        samples = self.calibration_service.export_samples()
-        quality = self.calibration_service.export_capture_quality()
         self._training_inputs = (samples, quality)
         self.training_worker = TrainingWorker(self.training_service, samples, quality)
         self.training_worker.succeeded.connect(self._on_training_succeeded)
@@ -989,10 +1014,16 @@ class TrainerMainWindow(QMainWindow):
         self.training_worker.finished.connect(self._on_training_finished)
         self.training_worker.start()
 
+    def _refresh_upgrade_button(self):
+        classifier = self.training_service.classifier if self.training_service else None
+        needs_upgrade = bool(classifier and classifier.model is not None and classifier.feature_version < FEATURE_VERSION)
+        self.btn_upgrade.setVisible(needs_upgrade)
+
     def _on_training_succeeded(self, classifier):
         samples, quality = self._training_inputs
-        self.calibration_service.mark_trained()
-        self.training_service.clear_pending_samples()
+        if not getattr(self, "_training_is_upgrade", False):
+            self.calibration_service.mark_trained()
+            self.training_service.clear_pending_samples()
 
         # Guardar estado de calibración en el perfil
         self.profile = self.training_service.build_profile_training_state(
@@ -1020,7 +1051,9 @@ class TrainerMainWindow(QMainWindow):
     def _on_training_finished(self):
         self.training_worker = None
         self.btn_train.setEnabled(True)
+        self.btn_upgrade.setEnabled(True)
         self.train_busy.setVisible(False)
+        self._refresh_upgrade_button()
         self._refresh_step_icons()
 
     def _clear_training_results(self):

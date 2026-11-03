@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Iterable
 
 import cv2
 import mediapipe as mp
 import numpy as np
 
 from .config_store import FACE_LANDMARKER_MODEL_PATH
+from .face_metrics import BROW_LEFT, BROW_RIGHT, FACE_WIDTH, LEFT_EYE, MOUTH_OPEN, NOSE_IDX, RIGHT_EYE, legacy_metrics
 from .models import FaceSample
 
 
@@ -35,13 +35,6 @@ SELECTED_LANDMARKS = [
     152,
 ]
 
-LEFT_EYE = [33, 160, 158, 133, 153, 144]
-RIGHT_EYE = [362, 385, 387, 263, 373, 380]
-MOUTH_OPEN = [13, 14, 78, 308]
-BROW_LEFT = [105, 66]
-BROW_RIGHT = [334, 296]
-FACE_WIDTH = [234, 454]
-NOSE_IDX = 1
 
 
 def head_pose_from_matrix(matrix) -> tuple[float, float, float] | None:
@@ -123,13 +116,7 @@ class LandmarkProvider:
             dtype=np.float32,
         )
 
-        metrics = {
-            "left_eye_ratio": self._aspect_ratio(LEFT_EYE, points_px),
-            "right_eye_ratio": self._aspect_ratio(RIGHT_EYE, points_px),
-            "mouth_open_ratio": self._mouth_open_ratio(points_px),
-            "smile_ratio": self._smile_ratio(points_px),
-            "brow_raise_ratio": self._brow_raise_ratio(points_px),
-        }
+        metrics = legacy_metrics(points_px)
 
         sample = FaceSample(
             timestamp_ms=self.timestamp_ms,
@@ -144,34 +131,3 @@ class LandmarkProvider:
             head_pose=head_pose,
         )
         return DetectionSnapshot(frame_rgb=frame_rgb, face_sample=sample)
-
-    def _aspect_ratio(self, indices: Iterable[int], points_px: dict[int, tuple[int, int]]) -> float:
-        p1, p2, p3, p4, p5, p6 = [points_px[idx] for idx in indices]
-        vertical_1 = abs(p2[1] - p6[1])
-        vertical_2 = abs(p3[1] - p5[1])
-        horizontal = max(abs(p1[0] - p4[0]), 1)
-        return float((vertical_1 + vertical_2) / (2.0 * horizontal))
-
-    def _mouth_open_ratio(self, points_px: dict[int, tuple[int, int]]) -> float:
-        upper = points_px[MOUTH_OPEN[0]]
-        lower = points_px[MOUTH_OPEN[1]]
-        left = points_px[MOUTH_OPEN[2]]
-        right = points_px[MOUTH_OPEN[3]]
-        vertical = abs(upper[1] - lower[1])
-        horizontal = max(abs(left[0] - right[0]), 1)
-        return float(vertical / horizontal)
-
-    def _smile_ratio(self, points_px: dict[int, tuple[int, int]]) -> float:
-        left = points_px[MOUTH_OPEN[2]]
-        right = points_px[MOUTH_OPEN[3]]
-        chin = points_px[152]
-        nose = points_px[NOSE_IDX]
-        width = abs(left[0] - right[0])
-        height = max(abs(chin[1] - nose[1]), 1)
-        return float(width / height)
-
-    def _brow_raise_ratio(self, points_px: dict[int, tuple[int, int]]) -> float:
-        brow_dist_left = abs(points_px[BROW_LEFT[0]][1] - points_px[BROW_LEFT[1]][1])
-        brow_dist_right = abs(points_px[BROW_RIGHT[0]][1] - points_px[BROW_RIGHT[1]][1])
-        face_width = max(abs(points_px[FACE_WIDTH[1]][0] - points_px[FACE_WIDTH[0]][0]), 1)
-        return float((brow_dist_left + brow_dist_right) / (2.0 * face_width))

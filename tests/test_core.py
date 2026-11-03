@@ -1,4 +1,5 @@
 import json
+import joblib
 import threading
 import time
 import unittest
@@ -32,6 +33,9 @@ from app.audio_utils import pick_fallback_input_device
 from app.gesture_catalog import CONFIDENCE_THRESHOLD_MAX, CONFIDENCE_THRESHOLD_MIN, NEUTRAL_DYNAMIC_ID
 from app.gesture_ml import BLENDSHAPE_NAMES
 from app.landmark_provider import head_pose_from_matrix
+from app.face_metrics import BROW_LEFT, BROW_RIGHT, FACE_WIDTH, LEFT_EYE, MOUTH_OPEN, RIGHT_EYE, feature_metrics, legacy_metrics
+from app.gesture_catalog import GESTURE_CATALOG
+from sklearn.linear_model import LogisticRegression
 from app.speech import SpeechQueue
 from app.preflight import evaluate_preflight, summarize_preflight
 from app.runtime_app import voice_status
@@ -1053,6 +1057,86 @@ class CoreTests(unittest.TestCase):
         finally:
             if profile_dir.exists():
                 rmtree(profile_dir)
+
+    @staticmethod
+    def _face_points(brow_lift: float = 0.0):
+        points = {idx: (float(100 + i * 3), 100.0) for i, idx in enumerate(LEFT_EYE + RIGHT_EYE + MOUTH_OPEN)}
+        points.update({1: (150.0, 120.0), 152: (150.0, 220.0), FACE_WIDTH[0]: (50.0, 120.0), FACE_WIDTH[1]: (250.0, 120.0)})
+        points.update({159: (110.0, 90.0), 386: (190.0, 90.0)})
+        points.update({
+            BROW_LEFT[0]: (110.0, 70.0 - brow_lift), BROW_LEFT[1]: (120.0, 72.0 - brow_lift),
+            BROW_RIGHT[0]: (190.0, 70.0 - brow_lift), BROW_RIGHT[1]: (180.0, 72.0 - brow_lift),
+        })
+        return points
+
+    def test_brow_eye_metric_sees_raised_brows(self):
+        resting, raised = self._face_points(), self._face_points(brow_lift=12.0)
+        # La métrica antigua mide dos puntos de la misma ceja: no cambia al levantarla.
+        self.assertEqual(legacy_metrics(resting)["brow_raise_ratio"], legacy_metrics(raised)["brow_raise_ratio"])
+        self.assertAlmostEqual(feature_metrics(resting)[0], 20 / 200)
+        self.assertAlmostEqual(feature_metrics(raised)[0], 32 / 200)
+
+    def test_feature_metrics_fall_back_when_points_are_missing(self):
+        sample = make_sample(1)
+        values = feature_metrics(sample.points_px, sample.metrics)
+        self.assertEqual(values[1], sample.metrics["left_eye_ratio"])
+        self.assertEqual(values[0], sample.metrics["brow_raise_ratio"])
+
+    def test_new_models_normalize_and_roundtrip(self):
+        profile_name = f"test_v2_{uuid.uuid4().hex[:8]}"
+        profile_dir = profile_calibration_dir(profile_name)
+        try:
+            classifier = GestureClassifier(profile_name, window_size=4)
+            samples = {
+                "neutral": [make_sample(i) for i in range(20)],
+                "smile": [make_shifted_sample(i, 0.4) for i in range(20)],
+            }
+            classifier.fit(samples)
+            self.assertEqual(classifier.feature_version, 2)
+            self.assertEqual(classifier.extractor.metric_source, "int")
+            self.assertTrue((classifier.extractor.neutral_std >= 0.05).all())
+            # 17 ventanas por paso: 4 de validación y una purga de 4 antes de ellas.
+            self.assertEqual(classifier.training_summary["validation_windows"], 8)
+            self.assertEqual(classifier.training_summary["train_windows"], 18)
+
+            window = samples["smile"][-4:]
+            loaded = GestureClassifier(profile_name, window_size=4)
+            self.assertTrue(loaded.load())
+            self.assertEqual(loaded.feature_version, 2)
+            self.assertEqual(loaded.predict(window).gesture_id, "smile")
+            self.assertAlmostEqual(loaded.predict(window).confidence, classifier.predict(window).confidence, places=5)
+        finally:
+            if profile_dir.exists():
+                rmtree(profile_dir)
+
+    def test_old_model_files_keep_working_without_normalization(self):
+        profile_name = f"test_v1_{uuid.uuid4().hex[:8]}"
+        profile_dir = profile_calibration_dir(profile_name)
+        try:
+            extractor = GestureFeatureExtractor(window_size=4)
+            X = [extractor.extract([make_sample(i + j) for i in range(4)]) for j in range(6)]
+            X += [extractor.extract([make_shifted_sample(i + j, 0.4) for i in range(4)]) for j in range(6)]
+            model = LogisticRegression(C=20.0).fit(np.array(X), ["neutral"] * 6 + ["smile"] * 6)
+            joblib.dump({"model": model, "labels": ["neutral", "smile"], "training_summary": {"window_size": 4}}, GestureClassifier(profile_name).model_path)
+            loaded = GestureClassifier(profile_name, window_size=4)
+            self.assertTrue(loaded.load())
+            self.assertEqual(loaded.feature_version, 1)
+            self.assertIsNone(loaded.extractor.neutral_mean)
+            self.assertEqual(loaded.predict([make_shifted_sample(i, 0.4) for i in range(4)]).gesture_id, "smile")
+        finally:
+            GestureClassifier(profile_name).model_path.unlink(missing_ok=True)
+            if profile_dir.exists():
+                rmtree(profile_dir)
+
+    def test_preflight_warns_about_old_model(self):
+        checks = {c.key: c for c in evaluate_preflight(self._preflight_snapshot(model_feature_version=1), 2.0, 0.3)}
+        self.assertEqual(checks["model"].status, "warning")
+        self.assertIn("Actualizar modelo", checks["model"].detail)
+
+    def test_confirm_gesture_is_defined_as_raised_brows(self):
+        confirm = next(gesture for gesture in GESTURE_CATALOG if gesture["id"] == "confirm")
+        self.assertIn("cejas", confirm["training_hint"].lower())
+        self.assertEqual(confirm["short_action"], "Enter")
 
 if __name__ == "__main__":
     unittest.main()

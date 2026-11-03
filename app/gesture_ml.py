@@ -8,6 +8,8 @@ import joblib
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 from .config_store import (
     active_dataset_summary_path,
@@ -18,6 +20,7 @@ from .config_store import (
     versioned_dataset_path,
     versioned_model_path,
 )
+from .face_metrics import feature_metrics
 from .gesture_catalog import (
     CONFIDENCE_THRESHOLD_MIN,
     NEUTRAL_DYNAMIC_ID,
@@ -27,22 +30,33 @@ from .gesture_catalog import (
 from .models import FaceSample, GesturePrediction
 
 
+# Versión de características con la que entrena fit():
+#   1: métricas en píxeles enteros, sin normalizar (modelos antiguos; solo se cargan).
+#   2: métricas con distancia ceja-ojo, normalizadas respecto a la pose neutral de la
+#      persona, y regresión logística sobre embeddings escalados.
+FEATURE_VERSION = 2
+NEUTRAL_STATS_TRAIN_FRACTION = 0.75
+# Mínimo de la desviación neutral: con la cara quieta es tan pequeña (~0.01) que cualquier
+# cambio natural parecería un gesto.
+NEUTRAL_STD_FLOOR = 0.05
+
+
 class DeterministicGRUEncoder:
     def __init__(self, input_dim: int = 5, hidden_dim: int = 32, seed: int = 42):
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         rng = np.random.default_rng(seed)
-        
+
         # Update gate weights
         self.W_z = rng.normal(0.0, 0.1, (input_dim, hidden_dim)).astype(np.float32)
         self.U_z = rng.normal(0.0, 0.1, (hidden_dim, hidden_dim)).astype(np.float32)
         self.b_z = np.zeros(hidden_dim, dtype=np.float32)
-        
+
         # Reset gate weights
         self.W_r = rng.normal(0.0, 0.1, (input_dim, hidden_dim)).astype(np.float32)
         self.U_r = rng.normal(0.0, 0.1, (hidden_dim, hidden_dim)).astype(np.float32)
         self.b_r = np.zeros(hidden_dim, dtype=np.float32)
-        
+
         # Candidate hidden state weights
         self.W_h = rng.normal(0.0, 0.1, (input_dim, hidden_dim)).astype(np.float32)
         self.U_h = rng.normal(0.0, 0.1, (hidden_dim, hidden_dim)).astype(np.float32)
@@ -66,15 +80,42 @@ class GestureFeatureExtractor:
     def __init__(self, window_size: int = 12):
         self.window_size = window_size
         self.gru = DeterministicGRUEncoder(input_dim=5, hidden_dim=32, seed=42)
+        self.feature_version = 1
+        self.metric_source = "int"
+        self.neutral_mean: np.ndarray | None = None
+        self.neutral_std: np.ndarray | None = None
+
+    def configure(self, feature_version: int, metric_source: str = "int", neutral_mean=None, neutral_std=None) -> None:
+        self.feature_version = int(feature_version)
+        self.metric_source = metric_source
+        self.neutral_mean = None if neutral_mean is None else np.asarray(neutral_mean, dtype=np.float32)
+        self.neutral_std = None if neutral_std is None else np.asarray(neutral_std, dtype=np.float32)
+
+    def raw_sequence(self, samples: list[FaceSample]) -> np.ndarray:
+        """Métricas por fotograma, antes de normalizar."""
+        if self.feature_version < 2:
+            metric_order = sorted(samples[0].metrics.keys())
+            return np.array([[sample.metrics[name] for name in metric_order] for sample in samples], dtype=np.float32)
+        use_precise = self.metric_source == "precise"
+        return np.array(
+            [
+                feature_metrics(sample.points_precise if use_precise else sample.points_px, sample.metrics)
+                for sample in samples
+            ],
+            dtype=np.float32,
+        )
+
+    def normalize(self, sequence: np.ndarray) -> np.ndarray:
+        if self.neutral_mean is None or self.neutral_std is None:
+            return sequence
+        return (sequence - self.neutral_mean) / self.neutral_std
+
+    def encode(self, sequence: np.ndarray) -> np.ndarray:
+        return self.gru.encode(sequence.astype(np.float32)).astype(np.float32)
 
     def extract(self, samples: list[FaceSample]) -> np.ndarray:
         window = samples[-self.window_size :]
-        metric_order = sorted(window[0].metrics.keys())
-        metric_stack = np.stack([[sample.metrics[name] for name in metric_order] for sample in window])
-        
-        sequence = metric_stack.astype(np.float32)
-        feature_vector = self.gru.encode(sequence)
-        return feature_vector.astype(np.float32)
+        return self.encode(self.normalize(self.raw_sequence(window)))
 
 
 # Orden fijo de los blendshapes de MediaPipe Face Landmarker: se guardan como lista para
@@ -213,7 +254,11 @@ class GestureClassifier:
             if len(windows) >= 6:
                 validation_count = max(1, int(round(len(windows) * 0.25)))
             train_cutoff = len(windows) - validation_count
-            for vector in windows[:train_cutoff]:
+            # Purga: entrenamiento y validación no comparten ningún fotograma.
+            train_end = train_cutoff
+            if validation_count:
+                train_end = max(min(train_cutoff, 3), train_cutoff - self.window_size)
+            for vector in windows[:train_end]:
                 train_features.append(vector)
                 train_labels.append(label)
             for vector in windows[train_cutoff:]:
@@ -282,6 +327,25 @@ class GestureClassifier:
     def _save_registry(self, payload: dict) -> None:
         self.registry_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
+    @property
+    def feature_version(self) -> int:
+        return self.extractor.feature_version
+
+    def _apply_payload(self, payload: dict) -> None:
+        self.model = payload["model"]
+        self.labels = payload["labels"]
+        self.training_summary = payload.get("training_summary", {})
+        # Sincronizar el tamaño de ventana guardado
+        if "window_size" in self.training_summary:
+            self.window_size = int(self.training_summary["window_size"])
+            self.extractor.window_size = self.window_size
+        self.extractor.configure(
+            payload.get("feature_version", 1),
+            payload.get("metric_source", "int"),
+            payload.get("neutral_mean"),
+            payload.get("neutral_std"),
+        )
+
     def load(self, version: int | None = None) -> bool:
         registry = self._load_registry()
         target_version = version if version is not None else registry.get("active_version")
@@ -293,33 +357,17 @@ class GestureClassifier:
             self.samples_path = self.summary_path
             dataset_name = version_entry.get("dataset_path")
             self.active_dataset_path = str(self.profile_dir / dataset_name) if dataset_name else None
-            payload = joblib.load(self.model_path)
-            self.model = payload["model"]
-            self.labels = payload["labels"]
-            self.training_summary = payload.get("training_summary", {})
+            self._apply_payload(joblib.load(self.model_path))
             self.active_version = target_version
-            
-            # Sincronizar el tamaño de ventana guardado
-            if "window_size" in self.training_summary:
-                self.window_size = int(self.training_summary["window_size"])
-                self.extractor.window_size = self.window_size
             return True
 
         legacy_path = legacy_model_path(self.profile_name)
         if legacy_path.exists():
-            payload = joblib.load(legacy_path)
             self.model_path = legacy_path
             self.samples_path = legacy_dataset_summary_path(self.profile_name)
-            self.model = payload["model"]
-            self.labels = payload["labels"]
-            self.training_summary = payload.get("training_summary", {})
+            self._apply_payload(joblib.load(legacy_path))
             self.active_version = None
             self.active_dataset_path = None
-            
-            # Sincronizar el tamaño de ventana guardado
-            if "window_size" in self.training_summary:
-                self.window_size = int(self.training_summary["window_size"])
-                self.extractor.window_size = self.window_size
             return True
 
         return False
@@ -332,6 +380,10 @@ class GestureClassifier:
                 "model": self.model,
                 "labels": self.labels,
                 "training_summary": self.training_summary,
+                "feature_version": self.extractor.feature_version,
+                "metric_source": self.extractor.metric_source,
+                "neutral_mean": None if self.extractor.neutral_mean is None else self.extractor.neutral_mean.tolist(),
+                "neutral_std": None if self.extractor.neutral_std is None else self.extractor.neutral_std.tolist(),
             },
             self.model_path,
         )
@@ -357,18 +409,32 @@ class GestureClassifier:
                         return deserialize_samples_by_gesture(payload.get("samples_by_gesture", {}))
         return {}
 
+    @staticmethod
+    def _neutral_statistics(neutral_sequence: np.ndarray | None) -> tuple[np.ndarray, np.ndarray]:
+        """Media y desviación de la pose neutral de la persona (sin el tramo de validación)."""
+        if neutral_sequence is None or len(neutral_sequence) == 0:
+            return np.zeros(5, dtype=np.float32), np.ones(5, dtype=np.float32)
+        train_part = neutral_sequence[: max(1, int(len(neutral_sequence) * NEUTRAL_STATS_TRAIN_FRACTION))]
+        return train_part.mean(axis=0), np.maximum(train_part.std(axis=0), NEUTRAL_STD_FLOOR)
+
     def fit(self, samples_by_gesture: dict[str, list[FaceSample]], capture_quality_summary: dict | None = None) -> None:
         windows_by_gesture: dict[str, list[np.ndarray]] = {}
         class_windows: dict[str, int] = {}
-        for gesture_id, samples in samples_by_gesture.items():
-            if len(samples) < self.window_size:
-                continue
-            windows_by_gesture[gesture_id] = []
-            class_windows[gesture_id] = 0
-            for index in range(self.window_size, len(samples) + 1):
-                window = samples[index - self.window_size : index]
-                windows_by_gesture[gesture_id].append(self.extractor.extract(window))
-                class_windows[gesture_id] += 1
+        usable = {gesture_id: samples for gesture_id, samples in samples_by_gesture.items() if len(samples) >= self.window_size}
+        # Con capturas nuevas se usan las coordenadas con decimales; un dataset antiguo o mixto usa píxeles enteros.
+        all_precise = bool(usable) and all(sample.points_precise for samples in usable.values() for sample in samples)
+        metric_source = "precise" if all_precise else "int"
+        self.extractor.configure(FEATURE_VERSION, metric_source)
+        raw_sequences = {gesture_id: self.extractor.raw_sequence(samples) for gesture_id, samples in usable.items()}
+        neutral_mean, neutral_std = self._neutral_statistics(raw_sequences.get("neutral"))
+        self.extractor.configure(FEATURE_VERSION, metric_source, neutral_mean, neutral_std)
+        for gesture_id, raw_sequence in raw_sequences.items():
+            sequence = self.extractor.normalize(raw_sequence)
+            windows_by_gesture[gesture_id] = [
+                self.extractor.encode(sequence[index - self.window_size : index])
+                for index in range(self.window_size, len(sequence) + 1)
+            ]
+            class_windows[gesture_id] = len(windows_by_gesture[gesture_id])
 
         labels = sorted({training_label(gesture_id) for gesture_id in windows_by_gesture})
         if len(labels) < 2:
@@ -387,12 +453,9 @@ class GestureClassifier:
         next_version = (max(existing_versions) + 1) if existing_versions else 1
 
         feature_matrix = np.vstack(train_features)
-        self.model = LogisticRegression(
-            C=20.0,
-            penalty="l2",
-            class_weight="balanced",
-            max_iter=1000,
-            random_state=42,
+        self.model = make_pipeline(
+            StandardScaler(),
+            LogisticRegression(C=1.0, penalty="l2", class_weight="balanced", max_iter=3000, random_state=42),
         )
         self.model.fit(feature_matrix, np.array(train_labels))
         self.labels = sorted(set(train_labels))
@@ -450,7 +513,9 @@ class GestureClassifier:
             },
             "windows_per_step": class_windows,
             "hard_negative_false_alarm_rate": hard_negative_false_alarm_rate,
-            "model_type": "LogisticRegression",
+            "model_type": "StandardScaler + LogisticRegression",
+            "feature_version": self.extractor.feature_version,
+            "metric_source": self.extractor.metric_source,
             "model_path": str(self.model_path),
             "dataset_path": str(dataset_path),
             "validation_accuracy": validation_accuracy,
@@ -482,6 +547,7 @@ class GestureClassifier:
             "validation_windows": int(len(validation_features)),
             "validation_accuracy": validation_accuracy,
             "recommended_thresholds": recommended_thresholds,
+            "feature_version": self.extractor.feature_version,
         }
         registry.setdefault("versions", []).append(registry_entry)
         registry["profile"] = self.profile_name

@@ -95,6 +95,13 @@ def _gesture_model_check(snapshot: dict) -> PreflightCheck:
         return PreflightCheck(
             "model", "Modelo de gestos", "error", "Este perfil no tiene un modelo entrenado. Abre el Entrenador."
         )
+    if int(snapshot.get("model_feature_version", 2)) < 2:
+        return PreflightCheck(
+            "model",
+            "Modelo de gestos",
+            "warning",
+            "Modelo antiguo, detecta menos gestos. En el Entrenador, paso Entrenamiento, pulsa «Actualizar modelo».",
+        )
     parts = []
     if snapshot.get("model_version") is not None:
         parts.append(f"Versión {snapshot['model_version']}")

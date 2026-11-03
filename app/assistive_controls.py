@@ -227,6 +227,7 @@ class AssistiveController:
             "voice_model_error": self.voice_model_error,
             "model_loaded": self.classifier.model is not None,
             "model_version": self.classifier.active_version,
+            "model_feature_version": self.classifier.feature_version,
             "model_accuracy": summary.get("validation_accuracy"),
             "hotkey_registered": bool(self.emergency_hotkey.registered),
         }
