@@ -185,6 +185,8 @@ def system_status(payload: dict) -> tuple[str, str, bool]:
         return "Detenido", "neutral", False
     if face == "sin rostro":
         return "Buscando rostro", "neutral", True
+    if payload.get("zone_hint"):
+        return "Fuera de posición", "warning", False
     if runtime_state == "validando gesto":
         return "Validando gesto", "accent", False
     if face == "inestable":
@@ -594,6 +596,7 @@ class RuntimeMainWindow(QMainWindow):
         self._update_diagnostics(payload)
         self._update_stateful_buttons(payload)
         self._update_recording_indicator(payload.get("usage_recording_s"))
+        self.video_view.set_corner_badge(self._display_text(payload.get("zone_hint", "")), "warning")
         self._update_compact(payload, status_text, status_tone, pulse, cursor_text, cursor_tone)
 
     def _show_executed_gesture(self, gesture_id: str, payload: dict):

@@ -129,5 +129,6 @@ class LandmarkProvider:
             points_precise=points_precise,
             blendshapes=blendshapes,
             head_pose=head_pose,
+            frame_size=(width, height),
         )
         return DetectionSnapshot(frame_rgb=frame_rgb, face_sample=sample)

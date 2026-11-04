@@ -49,7 +49,42 @@ EYE_METRICS = ("left_eye_ratio", "right_eye_ratio")
 MIN_EYE_CLOSURE = 0.03
 MIN_BLENDSHAPE_RISE = 0.15
 # Sube al cambiar lo que calculan los límites: los modelos anteriores piden "Actualizar modelo".
-SIGNAL_VERSION = 2
+SIGNAL_VERSION = 3
+# Zona de uso: la postura y la distancia que cubrió la calibración, con un margen. Fuera de
+# ella los gestos se confunden, así que la interfaz pide volver a la posición.
+ZONE_POSE_MARGIN_DEG = 5.0
+ZONE_FACE_WIDTH_MARGIN = (0.75, 1.35)
+
+
+def compute_usage_zone(samples_by_gesture: dict[str, list[FaceSample]]) -> dict | None:
+    """Rango de postura y distancia de la calibración; None si el dataset no guardó la postura."""
+    steps = [samples for gesture_id, samples in samples_by_gesture.items() if gesture_id != NEUTRAL_DYNAMIC_ID and samples]
+    if not steps or any(sample.head_pose is None for samples in steps for sample in samples):
+        return None
+    poses = [np.array([sample.head_pose for sample in samples]) for samples in steps]
+    zone = {
+        "pitch": [
+            round(float(min(np.percentile(pose[:, 0], 5) for pose in poses)) - ZONE_POSE_MARGIN_DEG, 1),
+            round(float(max(np.percentile(pose[:, 0], 95) for pose in poses)) + ZONE_POSE_MARGIN_DEG, 1),
+        ],
+        "yaw": [
+            round(float(min(np.percentile(pose[:, 1], 5) for pose in poses)) - ZONE_POSE_MARGIN_DEG, 1),
+            round(float(max(np.percentile(pose[:, 1], 95) for pose in poses)) + ZONE_POSE_MARGIN_DEG, 1),
+        ],
+        "face_width": None,
+        "frame_size": None,
+    }
+    # La distancia solo es comparable si toda la calibración usó la misma resolución.
+    sizes = {sample.frame_size for samples in steps for sample in samples}
+    if len(sizes) == 1 and None not in sizes:
+        width = next(iter(sizes))[0]
+        ratios = [np.array([sample.face_scale_px / width for sample in samples]) for samples in steps]
+        zone["face_width"] = [
+            round(float(min(np.percentile(ratio, 5) for ratio in ratios)) * ZONE_FACE_WIDTH_MARGIN[0], 4),
+            round(float(max(np.percentile(ratio, 95) for ratio in ratios)) * ZONE_FACE_WIDTH_MARGIN[1], 4),
+        ]
+        zone["frame_size"] = list(next(iter(sizes)))
+    return zone
 
 
 def _blendshape_score(sample: FaceSample, kind: str) -> float | None:
@@ -202,6 +237,8 @@ def serialize_face_sample(sample: FaceSample) -> dict:
             payload["blendshapes"] = {key: round(float(value), 3) for key, value in sample.blendshapes.items()}
     if sample.head_pose is not None:
         payload["head_pose"] = [round(float(value), 2) for value in sample.head_pose]
+    if sample.frame_size is not None:
+        payload["frame_size"] = [int(sample.frame_size[0]), int(sample.frame_size[1])]
     return payload
 
 
@@ -219,6 +256,7 @@ def deserialize_face_sample(payload: dict) -> FaceSample:
         },
         blendshapes=_deserialize_blendshapes(payload.get("blendshapes")),
         head_pose=tuple(float(value) for value in payload["head_pose"]) if payload.get("head_pose") else None,
+        frame_size=tuple(int(value) for value in payload["frame_size"]) if payload.get("frame_size") else None,
     )
 
 
@@ -284,6 +322,7 @@ class GestureClassifier:
         self.active_dataset_path = None
         self.signal_limits: dict | None = None
         self.signal_version = 0
+        self.usage_zone: dict | None = None
 
     def _split_windows_temporally(
         self, windows_by_gesture: dict[str, list[np.ndarray]]
@@ -396,11 +435,30 @@ class GestureClassifier:
         )
         self.signal_limits = payload.get("signal_limits")
         self.signal_version = int(payload.get("signal_version", 1 if self.signal_limits is not None else 0))
+        self.usage_zone = payload.get("usage_zone")
 
     @property
     def needs_refresh(self) -> bool:
         """El modelo se puede mejorar reentrenando con sus datos guardados, sin recalibrar."""
         return self.model is not None and (self.feature_version < FEATURE_VERSION or self.signal_version < SIGNAL_VERSION)
+
+    def zone_issue(self, sample: FaceSample | None) -> str | None:
+        """"far"/"near"/"pose" si la cara está fuera de lo calibrado; None si está dentro o no se sabe."""
+        zone = self.usage_zone
+        if zone is None or sample is None:
+            return None
+        face_width = zone.get("face_width")
+        if face_width and sample.frame_size and list(sample.frame_size) == zone.get("frame_size"):
+            ratio = sample.face_scale_px / sample.frame_size[0]
+            if ratio < face_width[0]:
+                return "far"
+            if ratio > face_width[1]:
+                return "near"
+        if sample.head_pose is not None:
+            pitch, yaw = sample.head_pose[0], sample.head_pose[1]
+            if not (zone["pitch"][0] <= pitch <= zone["pitch"][1] and zone["yaw"][0] <= yaw <= zone["yaw"][1]):
+                return "pose"
+        return None
 
     def verify_signal(self, gesture_id: str, sample: FaceSample | None) -> bool | None:
         """True/False si la señal confirma o no el gesto; None si este gesto no se puede verificar."""
@@ -454,6 +512,7 @@ class GestureClassifier:
                 "neutral_std": None if self.extractor.neutral_std is None else self.extractor.neutral_std.tolist(),
                 "signal_limits": self.signal_limits,
                 "signal_version": self.signal_version,
+                "usage_zone": self.usage_zone,
             },
             self.model_path,
         )
@@ -500,6 +559,8 @@ class GestureClassifier:
         self.extractor.configure(FEATURE_VERSION, metric_source, neutral_mean, neutral_std)
         self.signal_limits = compute_signal_limits(raw_sequences, usable)
         self.signal_version = SIGNAL_VERSION
+        self.usage_zone = compute_usage_zone(usable)
+        frame_sizes = {sample.frame_size for samples in usable.values() for sample in samples}
         for gesture_id, raw_sequence in raw_sequences.items():
             sequence = self.extractor.normalize(raw_sequence)
             windows_by_gesture[gesture_id] = [
@@ -587,6 +648,9 @@ class GestureClassifier:
             "hard_negative_false_alarm_rate": hard_negative_false_alarm_rate,
             "model_type": "StandardScaler + LogisticRegression",
             "signal_limits": self.signal_limits,
+            "usage_zone": self.usage_zone,
+            "mixed_capture_resolution": len(frame_sizes) > 1,
+            "capture_resolution": list(next(iter(frame_sizes))) if len(frame_sizes) == 1 and None not in frame_sizes else None,
             "feature_version": self.extractor.feature_version,
             "metric_source": self.extractor.metric_source,
             "model_path": str(self.model_path),

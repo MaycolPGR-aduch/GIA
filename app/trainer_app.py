@@ -40,6 +40,7 @@ from app.config_store import (
     list_profiles,
     load_profile,
     load_settings,
+    parse_camera_resolution,
     save_profile,
     save_settings,
 )
@@ -709,7 +710,8 @@ class TrainerMainWindow(QMainWindow):
         fps = int(self.settings.get("fps", 15))
         if self.camera_thread:
             self.camera_thread.stop()
-        self.camera_thread = CameraThread(camera_index=camera_idx, fps=fps)
+        width, height = parse_camera_resolution(self.settings.get("camera_resolution"))
+        self.camera_thread = CameraThread(camera_index=camera_idx, fps=fps, width=width, height=height)
         self.camera_thread.frame_processed.connect(self.on_diag_frame)
         self.camera_thread.camera_error.connect(self.on_camera_error)
         self.camera_thread.start()
@@ -836,7 +838,8 @@ class TrainerMainWindow(QMainWindow):
         if self.camera_thread:
             self.camera_thread.stop()
 
-        self.camera_thread = CameraThread(camera_index=camera_idx, fps=fps)
+        width, height = parse_camera_resolution(self.settings.get("camera_resolution"))
+        self.camera_thread = CameraThread(camera_index=camera_idx, fps=fps, width=width, height=height)
         self.camera_thread.frame_processed.connect(self.on_calibration_frame)
         self.camera_thread.camera_error.connect(self.on_camera_error)
         self.camera_thread.start()
@@ -1103,6 +1106,8 @@ class TrainerMainWindow(QMainWindow):
             if false_alarms is not None
             else " · sin paso «Neutral en movimiento»: recalibra para medir gestos falsos"
         )
+        if summary.get("mixed_capture_resolution"):
+            false_alarm_text += " · ⚠ esta calibración mezcla resoluciones de cámara: recaptura todos los gestos"
         self.txt_train_results.setText(
             f"Modelo v{summary.get('version', '-')} · entrenado {trained_at} UTC · "
             f"ventana temporal de {summary.get('window_size', '-')} fotogramas · "

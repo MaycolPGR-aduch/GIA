@@ -31,7 +31,7 @@ from app.config_store import CALIBRATION_DIR, get_profile_summary
 from app.ui_theme import PALETTES, build_stylesheet
 from app.audio_utils import pick_fallback_input_device
 from app.gesture_catalog import CONFIDENCE_THRESHOLD_MAX, CONFIDENCE_THRESHOLD_MIN, NEUTRAL_DYNAMIC_ID
-from app.gesture_ml import BLENDSHAPE_NAMES, compute_signal_limits
+from app.gesture_ml import BLENDSHAPE_NAMES, SIGNAL_VERSION, compute_signal_limits, compute_usage_zone
 from app.landmark_provider import head_pose_from_matrix
 from app.face_metrics import BROW_LEFT, BROW_RIGHT, FACE_WIDTH, LEFT_EYE, MOUTH_OPEN, RIGHT_EYE, feature_metrics, legacy_metrics
 from app.gesture_catalog import GESTURE_CATALOG
@@ -39,7 +39,7 @@ from sklearn.linear_model import LogisticRegression
 from app.speech import SpeechQueue
 from app.usage_recorder import UsageRecorder, read_usage_recording
 from app.preflight import evaluate_preflight, summarize_preflight
-from app.runtime_app import voice_status
+from app.runtime_app import system_status, voice_status
 
 
 def make_sample(ts: int) -> FaceSample:
@@ -1342,7 +1342,7 @@ class CoreTests(unittest.TestCase):
         classifier._apply_payload({"model": object(), "labels": [], "feature_version": 2, "signal_limits": {"smile": {}}})
         self.assertEqual(classifier.signal_version, 1)
         self.assertTrue(classifier.needs_refresh)
-        classifier._apply_payload({"model": object(), "labels": [], "feature_version": 2, "signal_limits": {}, "signal_version": 2})
+        classifier._apply_payload({"model": object(), "labels": [], "feature_version": 2, "signal_limits": {}, "signal_version": SIGNAL_VERSION})
         self.assertFalse(classifier.needs_refresh)
 
     def _latch_sequence(self, steps):
@@ -1399,6 +1399,118 @@ class CoreTests(unittest.TestCase):
             + self._timeline(1.0, 1.4, "left_blink_intent", 0.95, True)
         )
         self.assertEqual(len(self._latch_sequence(steps)), 2)
+
+    @staticmethod
+    def _posed_sample(pitch=0.0, yaw=0.0, face=300.0, size=(1280, 720)):
+        sample = make_sample(1)
+        sample.head_pose = (pitch, yaw, 0.0)
+        sample.face_scale_px = face
+        sample.frame_size = size
+        return sample
+
+    def _zone_classifier(self, samples):
+        classifier = GestureClassifier.__new__(GestureClassifier)
+        classifier.usage_zone = compute_usage_zone(samples)
+        return classifier
+
+    def test_usage_zone_covers_calibration_with_margin(self):
+        samples = {
+            "neutral": [self._posed_sample(pitch=0, yaw=0)] * 5,
+            "smile": [self._posed_sample(pitch=4, yaw=-6, face=320)] * 5,
+            NEUTRAL_DYNAMIC_ID: [self._posed_sample(pitch=40, yaw=40)] * 5,  # mirar alrededor no amplía la zona
+        }
+        zone = compute_usage_zone(samples)
+        self.assertEqual(zone["pitch"], [-5.0, 9.0])
+        self.assertEqual(zone["yaw"], [-11.0, 5.0])
+        self.assertEqual(zone["frame_size"], [1280, 720])
+        self.assertAlmostEqual(zone["face_width"][0], 300 / 1280 * 0.75, places=3)
+        self.assertIsNone(compute_usage_zone({"neutral": [make_sample(1)]}))  # dataset antiguo sin postura
+
+    def test_zone_issue_detects_pose_and_distance(self):
+        classifier = self._zone_classifier({"neutral": [self._posed_sample()] * 5})
+        self.assertIsNone(classifier.zone_issue(self._posed_sample(pitch=3, yaw=-3)))
+        self.assertEqual(classifier.zone_issue(self._posed_sample(pitch=12)), "pose")
+        self.assertEqual(classifier.zone_issue(self._posed_sample(yaw=-12)), "pose")
+        self.assertEqual(classifier.zone_issue(self._posed_sample(face=150)), "far")
+        self.assertEqual(classifier.zone_issue(self._posed_sample(face=500)), "near")
+        self.assertIsNone(classifier.zone_issue(None))
+
+    def test_zone_ignores_distance_when_resolutions_differ(self):
+        # Calibración antigua a 640x480: su tamaño de cara no se puede comparar con 1280x720.
+        classifier = self._zone_classifier({"neutral": [self._posed_sample(face=245, size=(640, 480))] * 5})
+        self.assertIsNone(classifier.zone_issue(self._posed_sample(face=390)))
+        mixed = {"neutral": [self._posed_sample(size=(640, 480))] * 5, "smile": [self._posed_sample()] * 5}
+        self.assertIsNone(compute_usage_zone(mixed)["face_width"])
+
+    def _hint_controller(self):
+        controller = AssistiveController.__new__(AssistiveController)
+        controller.classifier = self._zone_classifier({"neutral": [self._posed_sample()] * 5})
+        controller.cursor_active = False
+        controller.zone_hint = ""
+        controller._zone_issue_since = None
+        controller._zone_clear_since = None
+        return controller
+
+    def test_zone_hint_waits_and_clears_with_tolerance(self):
+        controller = self._hint_controller()
+        control = type("C", (), {"steering": False})()
+        away, centered = self._posed_sample(pitch=20), self._posed_sample()
+        controller._update_zone_hint(away, control, now=0.0)
+        controller._update_zone_hint(away, control, now=0.9)
+        self.assertEqual(controller.zone_hint, "")  # un movimiento breve no avisa
+        controller._update_zone_hint(away, control, now=1.0)
+        self.assertEqual(controller.zone_hint, "Mira al frente")
+        controller._update_zone_hint(centered, control, now=1.2)
+        self.assertEqual(controller.zone_hint, "Mira al frente")
+        controller._update_zone_hint(centered, control, now=1.7)
+        self.assertEqual(controller.zone_hint, "")
+        controller._update_zone_hint(self._posed_sample(face=150), control, now=2.0)
+        controller._update_zone_hint(self._posed_sample(face=150), control, now=3.1)
+        self.assertEqual(controller.zone_hint, "Acércate a la cámara")
+
+    def test_zone_hint_ignores_head_turned_to_steer_cursor(self):
+        controller = self._hint_controller()
+        controller.cursor_active = True
+        steering = type("C", (), {"steering": True})()
+        for now in (0.0, 1.5, 3.0):
+            controller._update_zone_hint(self._posed_sample(yaw=25), steering, now=now)
+        self.assertEqual(controller.zone_hint, "")
+        # Alejarse sí avisa aunque se esté guiando el cursor.
+        for now in (4.0, 5.5):
+            controller._update_zone_hint(self._posed_sample(face=150), steering, now=now)
+        self.assertEqual(controller.zone_hint, "Acércate a la cámara")
+
+    def test_zone_hint_appears_in_status_and_preflight(self):
+        self.assertEqual(system_status({"mode": "ready", "face": "estable", "zone_hint": "Mira al frente"})[:2], ("Fuera de posición", "warning"))
+        self.assertEqual(system_status({"mode": "paused", "face": "estable", "zone_hint": "Mira al frente"})[0], "En pausa")
+        checks = {c.key: c for c in evaluate_preflight(self._preflight_snapshot(zone_hint="Mira al frente"), 2.0, 0.3)}
+        self.assertEqual(checks["face"].status, "warning")
+        self.assertIn("mira al frente", checks["face"].detail)
+
+    def test_frame_size_roundtrip_and_mixed_resolution_flag(self):
+        sample = self._posed_sample()
+        self.assertEqual(deserialize_face_sample(serialize_face_sample(sample)).frame_size, (1280, 720))
+        profile_name = f"test_zone_{uuid.uuid4().hex[:8]}"
+        profile_dir = profile_calibration_dir(profile_name)
+        try:
+            classifier = GestureClassifier(profile_name, window_size=4)
+            samples = {
+                "neutral": [make_sample(i) for i in range(10)],
+                "smile": [make_shifted_sample(i, 0.4) for i in range(10)],
+            }
+            for item in samples["smile"]:
+                item.frame_size = (1280, 720)
+            classifier.fit(samples)
+            self.assertTrue(classifier.training_summary["mixed_capture_resolution"])
+            self.assertIsNone(classifier.training_summary["capture_resolution"])
+            for item in samples["neutral"]:
+                item.frame_size = (1280, 720)
+            classifier.fit(samples)
+            self.assertFalse(classifier.training_summary["mixed_capture_resolution"])
+            self.assertEqual(classifier.training_summary["capture_resolution"], [1280, 720])
+        finally:
+            if profile_dir.exists():
+                rmtree(profile_dir)
 
 if __name__ == "__main__":
     unittest.main()

@@ -32,6 +32,7 @@ class FaceSample:
     points_precise: dict[int, tuple[float, float]] = field(default_factory=dict)
     blendshapes: dict[str, float] = field(default_factory=dict)
     head_pose: tuple[float, float, float] | None = None
+    frame_size: tuple[int, int] | None = None  # (ancho, alto) de la imagen de la cámara
 
 
 @dataclass(slots=True)

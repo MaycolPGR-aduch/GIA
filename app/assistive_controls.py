@@ -46,6 +46,10 @@ PRECISION_SPEED_FACTOR = 0.35
 # Gestos que hacen clic en la posición del cursor: lo congelan mientras se validan.
 POSITIONAL_GESTURES = {"left_blink_intent", "right_blink_intent"}
 BROW_SIGNAL_CONFIDENCE = 0.9
+# Aviso de cara fuera de la zona calibrada: tolera movimientos breves para no parpadear.
+ZONE_HINT_ON_S = 1.0
+ZONE_HINT_OFF_S = 0.5
+ZONE_HINTS = {"pose": "Mira al frente", "far": "Acércate a la cámara", "near": "Aléjate un poco"}
 GESTURE_LABELS = {
     gesture["id"]: (gesture.get("short_title", gesture["title"]), gesture.get("short_action", gesture["action"]))
     for gesture in GESTURE_CATALOG
@@ -127,6 +131,9 @@ class AssistiveController:
         self.emergency_hotkey = GlobalHotkey(self._emergency_toggle_pause)
         self.usage_recorder = None
         self._usage_hotkeys = []
+        self.zone_hint = ""
+        self._zone_issue_since = None
+        self._zone_clear_since = None
         self.cap = None
         self.camera_state = "abriendo"
         self._camera_ok_since = None
@@ -241,6 +248,7 @@ class AssistiveController:
             "model_version": self.classifier.active_version,
             "model_feature_version": self.classifier.feature_version,
             "model_needs_refresh": self.classifier.needs_refresh,
+            "zone_hint": self.zone_hint,
             "model_accuracy": summary.get("validation_accuracy"),
             "hotkey_registered": bool(self.emergency_hotkey.registered),
         }
@@ -359,6 +367,7 @@ class AssistiveController:
                 self._last_face_seen_at = time.monotonic()
             control_state = self.heuristics.update(snapshot.face_sample)
             prediction, inference_result = self._evaluate_gesture(snapshot.face_sample, control_state)
+            self._update_zone_hint(snapshot.face_sample, control_state)
             self._record_usage(snapshot.face_sample, control_state, prediction, inference_result)
             self._apply_continuous_control(control_state)
             if self._gui_wants_frame():
@@ -575,7 +584,30 @@ class AssistiveController:
             runtime_state=result.runtime_state,
             rejection=result.rejection_reason or "",
             executed=bool(result.executed),
+            zone_hint=getattr(self, "zone_hint", ""),
         )
+
+    def _update_zone_hint(self, sample, control_state, now: float | None = None) -> None:
+        """Pide volver a la posición calibrada; girar la cabeza para guiar el cursor no cuenta."""
+        now = time.monotonic() if now is None else now
+        issue = self.classifier.zone_issue(sample)
+        if issue == "pose" and self.cursor_active and control_state.steering:
+            issue = None
+        if issue is None:
+            self._zone_issue_since = None
+            if sample is None:
+                self.zone_hint = ""
+            elif self.zone_hint:
+                if self._zone_clear_since is None:
+                    self._zone_clear_since = now
+                if now - self._zone_clear_since >= ZONE_HINT_OFF_S:
+                    self.zone_hint = ""
+            return
+        self._zone_clear_since = None
+        if self._zone_issue_since is None:
+            self._zone_issue_since = now
+        if now - self._zone_issue_since >= ZONE_HINT_ON_S or self.zone_hint:
+            self.zone_hint = ZONE_HINTS[issue]
 
     def _apply_brow_signal(self, prediction, sample):
         """Con las cejas arriba según MediaPipe, cuenta como "cejas" salvo otro gesto claro del modelo.
@@ -1035,6 +1067,7 @@ class AssistiveController:
             "hold_progress": round(float(hold_progress or 0.0), 3),
             "precision_mode": bool(getattr(self, "precision_mode", False)),
             "usage_recording_s": recorder.elapsed_s if (recorder := getattr(self, "usage_recorder", None)) else None,
+            "zone_hint": getattr(self, "zone_hint", ""),
             "voice_model_state": getattr(self, "voice_model_state", "lista"),
             **mic_payload,
         }

@@ -44,6 +44,9 @@ def _face_check(snapshot: dict) -> PreflightCheck:
         return PreflightCheck("face", "Rostro", "pending", "Esperando a la cámara…")
     since_seen = snapshot.get("face_seen_ago_s")
     if since_seen is not None and since_seen <= FACE_RECENT_S:
+        hint = snapshot.get("zone_hint")
+        if hint:
+            return PreflightCheck("face", "Rostro", "warning", f"Fuera de la posición calibrada: {hint.lower()}.")
         return PreflightCheck("face", "Rostro", "ok", "Rostro detectado")
     if float(snapshot.get("camera_ok_for_s", 0.0) or 0.0) < FACE_GRACE_S:
         return PreflightCheck("face", "Rostro", "pending", "Buscando rostro…")
@@ -100,7 +103,7 @@ def _gesture_model_check(snapshot: dict) -> PreflightCheck:
             "model",
             "Modelo de gestos",
             "warning",
-            "Modelo antiguo, comete más errores. En el Entrenador, paso Entrenamiento, pulsa «Actualizar modelo».",
+            "Modelo desactualizado. En el Entrenador, paso Entrenamiento, pulsa «Actualizar modelo».",
         )
     parts = []
     if snapshot.get("model_version") is not None:
