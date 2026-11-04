@@ -6,3 +6,8 @@
 .mypy_cache/
 data/logs/
 data/usage_recordings/
+# Datos personales y biométricos de los participantes: nunca en git.
+data/calibration/
+config/user_profiles/
+data/grabacion.wav
+data/registro_eventos.xlsx
