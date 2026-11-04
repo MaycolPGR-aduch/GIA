@@ -367,6 +367,9 @@ class RuntimeMainWindow(QMainWindow):
         self.cursor_badge = StatusBadge("Cursor congelado", "neutral", large=True)
         layout.addWidget(self.status_badge)
         layout.addWidget(self.cursor_badge)
+        self.recording_badge = StatusBadge("Grabando", "danger", large=True)
+        self.recording_badge.setVisible(False)
+        layout.addWidget(self.recording_badge)
 
         layout.addSpacing(6)
         self.btn_contrast = Button("", "contrast", variant="ghost", tooltip="Alto contraste (Ctrl+H)", checkable=True)
@@ -443,6 +446,10 @@ class RuntimeMainWindow(QMainWindow):
         btn_voice_guide.clicked.connect(self.show_voice_commands_dialog)
         btn_voice_test = Button("Probar voz", "mic", tooltip="Escucha una orden sin usar el gesto de ojos cerrados")
         btn_voice_test.clicked.connect(self._test_voice)
+        self.btn_record = Button(
+            "Grabar uso", "record", tooltip="Guarda puntos faciales y decisiones para analizar errores; sin video ni audio (Ctrl+G)"
+        )
+        self.btn_record.clicked.connect(self._toggle_usage_recording)
         btn_close = Button("Cerrar", "power", variant="danger", tooltip="Terminar la sesión")
         btn_close.clicked.connect(self._confirm_quit)
 
@@ -454,7 +461,8 @@ class RuntimeMainWindow(QMainWindow):
         grid.addWidget(btn_guide, 2, 1)
         grid.addWidget(btn_voice_guide, 3, 0)
         grid.addWidget(btn_voice_test, 3, 1)
-        grid.addWidget(btn_close, 4, 0, 1, 2)
+        grid.addWidget(self.btn_record, 4, 0)
+        grid.addWidget(btn_close, 4, 1)
         card.body.addLayout(grid)
         return card
 
@@ -505,6 +513,7 @@ class RuntimeMainWindow(QMainWindow):
             ("Ctrl+P", self._toggle_pause),
             ("Ctrl+K", self._toggle_cursor),
             ("Ctrl+L", self._toggle_precision),
+            ("Ctrl+G", self._toggle_usage_recording),
             ("Ctrl+R", self._recenter),
             ("Ctrl+T", self.show_preflight_dialog),
             ("Ctrl+M", self._toggle_compact),
@@ -584,6 +593,7 @@ class RuntimeMainWindow(QMainWindow):
         self._update_voice(payload, previous)
         self._update_diagnostics(payload)
         self._update_stateful_buttons(payload)
+        self._update_recording_indicator(payload.get("usage_recording_s"))
         self._update_compact(payload, status_text, status_tone, pulse, cursor_text, cursor_tone)
 
     def _show_executed_gesture(self, gesture_id: str, payload: dict):
@@ -743,8 +753,8 @@ class RuntimeMainWindow(QMainWindow):
         layout.addWidget(make_label("Guía rápida de interacción", role="title"))
         layout.addWidget(make_label(
             "Mantén cada gesto hasta que se llene la barra de su ficha; la ficha se ilumina en verde cuando "
-            "el gesto se ejecuta. Para hacer clic con el cursor activo, primero detenlo llevando la cabeza "
-            "al centro: el cursor se congela durante el guiño y el clic cae donde empezaste.",
+            "el gesto se ejecuta. Con el cursor activo, el cursor se congela durante el guiño y el clic cae "
+            "donde empezaste.",
             role="muted",
             wrap=True,
         ))
@@ -771,6 +781,9 @@ class RuntimeMainWindow(QMainWindow):
             ("Ctrl+Alt+P", "Pausa de emergencia (en cualquier app)"),
             ("Ctrl+K", "Activar / congelar cursor"),
             ("Ctrl+L", "Modo preciso (cursor lento)"),
+            ("Ctrl+G", "Grabar uso"),
+            ("Ctrl+Alt+E", "Al grabar: marcar un error (en cualquier app)"),
+            ("Ctrl+Alt+N", "Al grabar: marcar cambio de tramo (en cualquier app)"),
             ("Ctrl+R", "Recentrar cursor"),
             ("Ctrl+T", "Verificación del sistema"),
             ("Ctrl+M", "Modo compacto"),
@@ -938,6 +951,49 @@ class RuntimeMainWindow(QMainWindow):
     def _toggle_cursor(self):
         if self.controller:
             self.controller.toggle_cursor_control()
+
+    def _update_recording_indicator(self, seconds):
+        recording = seconds is not None
+        if self.recording_badge.isVisible() != recording:
+            self.recording_badge.setVisible(recording)
+            self.btn_record.setText("Detener grabación" if recording else "Grabar uso")
+            self.btn_record.set_icon_name("stop" if recording else "record")
+            self.btn_record.set_variant("warning" if recording else "")
+        if recording:
+            self.recording_badge.set_status(f"Grabando {int(seconds) // 60:02d}:{int(seconds) % 60:02d}", "danger", True)
+
+    def _toggle_usage_recording(self):
+        if not self.controller or not hasattr(self.controller, "start_usage_recording"):
+            return
+        if self.controller.usage_recorder is not None:
+            summary = self.controller.stop_usage_recording()
+            self._update_recording_indicator(None)
+            minutes = summary["seconds"] / 60
+            message = (
+                f"Se guardaron {minutes:.1f} minutos y {summary['frames']} fotogramas en:\n{summary['path']}"
+                f"\n\nErrores marcados: {summary['markers'].get('error', 0)}"
+            )
+            if summary["error"]:
+                QMessageBox.warning(self, "Grabación de uso", f"{message}\n\nHubo un problema al guardar: {summary['error']}")
+            else:
+                QMessageBox.information(self, "Grabación de uso", message)
+            return
+        answer = QMessageBox.question(
+            self,
+            "Grabar uso",
+            "Se guardarán en este PC los puntos faciales y las decisiones de cada fotograma "
+            "(data/usage_recordings). Son datos biométricos: graba solo con el permiso de la persona.\n\n"
+            "No se guarda video ni audio, y no se suben a git.\n\n"
+            "Mientras grabas: Ctrl+Alt+E marca un error y Ctrl+Alt+N un cambio de tramo.\n\n¿Empezar?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            self.controller.start_usage_recording()
+        except OSError as exc:
+            QMessageBox.warning(self, "Grabar uso", f"No se pudo iniciar la grabación:\n{exc}")
 
     def _toggle_precision(self):
         if self.controller and hasattr(self.controller, "toggle_precision_mode"):

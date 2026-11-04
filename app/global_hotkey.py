@@ -6,6 +6,9 @@ import threading
 # Atajo global de emergencia: funciona aunque GIA no tenga el foco (p. ej. tras un clic
 # facial en otra aplicación), algo que los atajos de Qt no pueden hacer.
 EMERGENCY_HOTKEY_LABEL = "Ctrl+Alt+P"
+# Marcas durante una grabación de uso (solo registradas mientras se graba).
+MARK_ERROR_HOTKEY_LABEL = "Ctrl+Alt+E"
+MARK_SEGMENT_HOTKEY_LABEL = "Ctrl+Alt+N"
 
 _MOD_ALT = 0x0001
 _MOD_CONTROL = 0x0002

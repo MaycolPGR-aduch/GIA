@@ -31,12 +31,13 @@ from app.config_store import CALIBRATION_DIR, get_profile_summary
 from app.ui_theme import PALETTES, build_stylesheet
 from app.audio_utils import pick_fallback_input_device
 from app.gesture_catalog import CONFIDENCE_THRESHOLD_MAX, CONFIDENCE_THRESHOLD_MIN, NEUTRAL_DYNAMIC_ID
-from app.gesture_ml import BLENDSHAPE_NAMES
+from app.gesture_ml import BLENDSHAPE_NAMES, compute_signal_limits
 from app.landmark_provider import head_pose_from_matrix
 from app.face_metrics import BROW_LEFT, BROW_RIGHT, FACE_WIDTH, LEFT_EYE, MOUTH_OPEN, RIGHT_EYE, feature_metrics, legacy_metrics
 from app.gesture_catalog import GESTURE_CATALOG
 from sklearn.linear_model import LogisticRegression
 from app.speech import SpeechQueue
+from app.usage_recorder import UsageRecorder, read_usage_recording
 from app.preflight import evaluate_preflight, summarize_preflight
 from app.runtime_app import voice_status
 
@@ -1137,6 +1138,147 @@ class CoreTests(unittest.TestCase):
         confirm = next(gesture for gesture in GESTURE_CATALOG if gesture["id"] == "confirm")
         self.assertIn("cejas", confirm["training_hint"].lower())
         self.assertEqual(confirm["short_action"], "Enter")
+
+    def test_usage_recorder_roundtrip_and_markers(self):
+        directory = Path(profile_calibration_dir(f"test_usage_{uuid.uuid4().hex[:8]}"))
+        try:
+            recorder = UsageRecorder("Perfil Prueba", {"model_version": 3}, directory=directory)
+            path = recorder.start()
+            recorder.record_frame(make_sample(1), gesture="smile", confidence=0.9, executed=True)
+            recorder.record_frame(None, gesture=None, confidence=None, executed=False)
+            recorder.mark("error")
+            summary = recorder.stop()
+            self.assertEqual(summary["frames"], 2)
+            self.assertEqual(summary["markers"], {"error": 1})
+            self.assertEqual(summary["error"], "")
+            recorder.record_frame(make_sample(2), gesture="smile")  # tras detener se ignora
+            self.assertEqual(recorder.frames, 2)
+
+            rows = list(read_usage_recording(path))
+            self.assertEqual([row["type"] for row in rows], ["header", "frame", "frame", "marker", "footer"])
+            self.assertEqual(rows[0]["model_version"], 3)
+            self.assertEqual(rows[1]["sample"].metrics, make_sample(1).metrics)
+            self.assertTrue(rows[1]["executed"])
+            self.assertIsNone(rows[2]["sample"])
+            self.assertEqual(rows[3]["kind"], "error")
+        finally:
+            if directory.exists():
+                rmtree(directory)
+
+    def test_usage_recorder_drops_frames_instead_of_blocking(self):
+        directory = Path(profile_calibration_dir(f"test_usage_{uuid.uuid4().hex[:8]}"))
+        try:
+            recorder = UsageRecorder("P", directory=directory)
+            recorder.active = True  # sin hilo escritor: la cola se llena
+            recorder._queue = __import__("queue").Queue(maxsize=2)
+            started = time.monotonic()
+            for ts in range(5):
+                recorder.record_frame(make_sample(ts))
+            self.assertLess(time.monotonic() - started, 0.5)
+            self.assertEqual((recorder.frames, recorder.dropped), (2, 3))
+        finally:
+            if directory.exists():
+                rmtree(directory)
+
+    def test_controller_records_usage_decisions(self):
+        controller = AssistiveController.__new__(AssistiveController)
+        controller.state = AppState.READY
+        controller.cursor_active = True
+        controller.precision_mode = False
+        frames = []
+        controller.usage_recorder = type("Rec", (), {"record_frame": lambda self, sample, **d: frames.append((sample, d))})()
+        control = type("C", (), {"steering": True, "face_stable": False})()
+        result = type("R", (), {"runtime_state": "rechazado", "rejection_reason": "confianza baja", "executed": False})()
+        sample = make_sample(1)
+        controller._record_usage(sample, control, GesturePrediction("smile", 0.41234567, False), result)
+        controller._record_usage(None, control, None, result)
+        self.assertIs(frames[0][0], sample)
+        self.assertEqual(frames[0][1]["confidence"], 0.4123)
+        self.assertEqual(frames[0][1]["rejection"], "confianza baja")
+        self.assertTrue(frames[0][1]["steering"])
+        self.assertIsNone(frames[1][1]["gesture"])
+        controller.usage_recorder = None
+        controller._record_usage(sample, control, None, result)  # sin grabación no hace nada
+        self.assertEqual(len(frames), 2)
+
+    @staticmethod
+    def _metric_rows(brow=0.12, left=0.26, mouth=0.0, right=0.28, smile=0.6, count=5):
+        return np.array([[brow, left, mouth, right, smile]] * count, dtype=np.float32)
+
+    def test_signal_limits_choose_the_closing_eye(self):
+        raw = {
+            "neutral": self._metric_rows(),
+            # El guiño derecho cierra la métrica del ojo izquierdo de la imagen.
+            "right_blink_intent": self._metric_rows(left=0.14),
+            "left_blink_intent": self._metric_rows(right=0.27),  # casi sin cierre: no se verifica
+        }
+        limits = compute_signal_limits(raw, {})
+        self.assertEqual(limits["right_blink_intent"], {"metric": "left_eye_ratio", "max": 0.2})
+        self.assertNotIn("left_blink_intent", limits)
+        self.assertEqual(compute_signal_limits({"smile": self._metric_rows()}, {}), {})
+
+    def test_signal_limits_for_smile_need_blendshapes(self):
+        def with_smile(value):
+            sample = make_sample(1)
+            sample.blendshapes = {"mouthSmileLeft": value, "mouthSmileRight": value}
+            return sample
+
+        raw = {"neutral": self._metric_rows()}
+        samples = {"neutral": [with_smile(0.04)] * 3, "smile": [with_smile(0.86)] * 3}
+        self.assertEqual(compute_signal_limits(raw, samples)["smile"], {"blendshape": "smile", "min": 0.45})
+        self.assertNotIn("smile", compute_signal_limits(raw, {"neutral": [make_sample(1)], "smile": [make_sample(2)]}))
+
+    def test_verify_signal_confirms_or_rejects(self):
+        classifier = GestureClassifier(f"test_signal_{uuid.uuid4().hex[:8]}")
+        rmtree(classifier.profile_dir, ignore_errors=True)
+        classifier.signal_limits = {
+            "right_blink_intent": {"metric": "left_eye_ratio", "max": 0.2},
+            "smile": {"blendshape": "smile", "min": 0.45},
+        }
+        open_eye, closed_eye = make_sample(1), make_sample(1)
+        open_eye.metrics["left_eye_ratio"], closed_eye.metrics["left_eye_ratio"] = 0.25, 0.1
+        self.assertFalse(classifier.verify_signal("right_blink_intent", open_eye))
+        self.assertTrue(classifier.verify_signal("right_blink_intent", closed_eye))
+        self.assertIsNone(classifier.verify_signal("confirm", open_eye))
+        self.assertIsNone(classifier.verify_signal("right_blink_intent", None))
+        self.assertIsNone(classifier.verify_signal("smile", open_eye))  # sin blendshapes no se puede verificar
+        open_eye.blendshapes = {"mouthSmileLeft": 0.05, "mouthSmileRight": 0.05}
+        self.assertFalse(classifier.verify_signal("smile", open_eye))
+
+    def test_signal_check_rejects_and_lets_verified_clicks_pass_while_steering(self):
+        profile = build_default_profile("signal_gate")
+        steering = type("State", (), {"face_stable": True, "status_text": "ok", "steering": True})()
+        wink = lambda: GesturePrediction("left_blink_intent", 0.95, False)
+        evaluate = lambda service, **kw: service.evaluate(make_sample(1), steering, wink(), AppState.READY, "activo", cursor_active=True, **kw)
+        result = evaluate(InferenceService(profile, 4), signal_verified=False)
+        self.assertEqual(result.rejection_reason, "sin señal del gesto")
+        self.assertEqual(evaluate(InferenceService(profile, 4)).rejection_reason, "cursor en movimiento")
+        self.assertEqual(evaluate(InferenceService(profile, 4), signal_verified=True).runtime_state, "validando gesto")
+
+    def test_preflight_warns_when_model_has_no_signal_check(self):
+        checks = {c.key: c for c in evaluate_preflight(self._preflight_snapshot(model_signal_check=False), 2.0, 0.3)}
+        self.assertEqual(checks["model"].status, "warning")
+
+    def test_fit_saves_signal_limits_and_old_models_have_none(self):
+        profile_name = f"test_limits_{uuid.uuid4().hex[:8]}"
+        profile_dir = profile_calibration_dir(profile_name)
+        try:
+            classifier = GestureClassifier(profile_name, window_size=4)
+            self.assertIsNone(classifier.signal_limits)
+            samples = {
+                "neutral": [make_sample(i) for i in range(10)],
+                "right_blink_intent": [make_sample(i) for i in range(10)],
+            }
+            for sample in samples["right_blink_intent"]:
+                sample.metrics["left_eye_ratio"] = 0.05
+            classifier.fit(samples)
+            self.assertEqual(classifier.signal_limits["right_blink_intent"]["metric"], "left_eye_ratio")
+            loaded = GestureClassifier(profile_name, window_size=4)
+            loaded.load()
+            self.assertEqual(loaded.signal_limits, classifier.signal_limits)
+        finally:
+            if profile_dir.exists():
+                rmtree(profile_dir)
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,7 +11,8 @@ from .models import AppState, FaceSample, GestureInferenceResult, GesturePredict
 # de reiniciar el conteo de duración: "sostener N ms" exige sostenerlo de forma continua.
 GESTURE_CONTINUITY_GAP_S = 0.25
 # Gestos que actúan en la posición del cursor (o en la ventana activa): con el cursor
-# activo solo se aceptan con la cabeza cerca del centro, es decir, con el cursor detenido.
+# moviéndose, la cabeza girada deforma las métricas, así que solo se aceptan si la señal
+# confirma el gesto; los que no se pueden verificar exigen la cabeza cerca del centro.
 CLICK_GESTURES = {"left_blink_intent", "right_blink_intent", "confirm"}
 
 
@@ -41,6 +42,7 @@ class InferenceService:
         cursor_label: str,
         allow_low_confidence: bool = False,
         cursor_active: bool = False,
+        signal_verified: bool | None = None,
     ) -> GestureInferenceResult:
         if sample is None:
             self.current_gesture = None
@@ -101,7 +103,22 @@ class InferenceService:
                 should_log=False,
             )
 
-        if cursor_active and getattr(control_state, "steering", False) and prediction.gesture_id in CLICK_GESTURES:
+        if signal_verified is False:
+            return self._reject(
+                prediction,
+                "Sin señal del gesto",
+                "El modelo sugiere un gesto, pero la señal facial no lo confirma.",
+                app_state,
+                cursor_label,
+                should_log=True,
+            )
+
+        if (
+            cursor_active
+            and getattr(control_state, "steering", False)
+            and prediction.gesture_id in CLICK_GESTURES
+            and not signal_verified
+        ):
             return self._reject(
                 prediction,
                 "Cursor en movimiento",

@@ -5,3 +5,4 @@
 .pytest_cache/
 .mypy_cache/
 data/logs/
+data/usage_recordings/

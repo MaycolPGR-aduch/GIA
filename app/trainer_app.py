@@ -1016,7 +1016,11 @@ class TrainerMainWindow(QMainWindow):
 
     def _refresh_upgrade_button(self):
         classifier = self.training_service.classifier if self.training_service else None
-        needs_upgrade = bool(classifier and classifier.model is not None and classifier.feature_version < FEATURE_VERSION)
+        needs_upgrade = bool(
+            classifier
+            and classifier.model is not None
+            and (classifier.feature_version < FEATURE_VERSION or classifier.signal_limits is None)
+        )
         self.btn_upgrade.setVisible(needs_upgrade)
 
     def _on_training_succeeded(self, classifier):

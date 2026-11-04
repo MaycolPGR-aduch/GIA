@@ -67,8 +67,8 @@ def _mic_check(snapshot: dict, elapsed_s: float, mic_peak_seen: float) -> Prefli
             "mic",
             "Micrófono",
             "error",
-            "No entrega señal (silencio absoluto). Revisa que no esté silenciado y que Windows lo permita "
-            "en Privacidad > Micrófono.",
+            "No entrega señal (silencio absoluto). Revisa que esté conectado, que no esté silenciado y que "
+            "Windows lo permita en Privacidad > Micrófono.",
         )
     return PreflightCheck(
         "mic",
@@ -95,12 +95,12 @@ def _gesture_model_check(snapshot: dict) -> PreflightCheck:
         return PreflightCheck(
             "model", "Modelo de gestos", "error", "Este perfil no tiene un modelo entrenado. Abre el Entrenador."
         )
-    if int(snapshot.get("model_feature_version", 2)) < 2:
+    if int(snapshot.get("model_feature_version", 2)) < 2 or not snapshot.get("model_signal_check", True):
         return PreflightCheck(
             "model",
             "Modelo de gestos",
             "warning",
-            "Modelo antiguo, detecta menos gestos. En el Entrenador, paso Entrenamiento, pulsa «Actualizar modelo».",
+            "Modelo antiguo, comete más errores. En el Entrenador, paso Entrenamiento, pulsa «Actualizar modelo».",
         )
     parts = []
     if snapshot.get("model_version") is not None:

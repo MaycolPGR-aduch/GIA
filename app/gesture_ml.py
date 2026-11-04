@@ -20,7 +20,7 @@ from .config_store import (
     versioned_dataset_path,
     versioned_model_path,
 )
-from .face_metrics import feature_metrics
+from .face_metrics import FEATURE_METRICS, feature_metrics
 from .gesture_catalog import (
     CONFIDENCE_THRESHOLD_MIN,
     NEUTRAL_DYNAMIC_ID,
@@ -39,6 +39,46 @@ NEUTRAL_STATS_TRAIN_FRACTION = 0.75
 # Mínimo de la desviación neutral: con la cara quieta es tan pequeña (~0.01) que cualquier
 # cambio natural parecería un gesto.
 NEUTRAL_STD_FLOOR = 0.05
+
+
+# Verificación por señal: un guiño exige el ojo realmente cerrándose y una sonrisa exige el
+# coeficiente de sonrisa de MediaPipe. Los límites son el punto medio entre el neutral y el
+# gesto de cada persona; sin una diferencia clara en su calibración no se verifica ese gesto.
+WINK_GESTURES = ("left_blink_intent", "right_blink_intent")
+EYE_METRICS = ("left_eye_ratio", "right_eye_ratio")
+MIN_EYE_CLOSURE = 0.03
+MIN_SMILE_RISE = 0.15
+
+
+def _smile_score(sample: FaceSample) -> float | None:
+    if not sample.blendshapes:
+        return None
+    return (sample.blendshapes.get("mouthSmileLeft", 0.0) + sample.blendshapes.get("mouthSmileRight", 0.0)) / 2.0
+
+
+def compute_signal_limits(raw_sequences: dict[str, np.ndarray], samples_by_gesture: dict[str, list[FaceSample]]) -> dict:
+    """Límites por gesto a partir de la calibración (secuencias en el orden de FEATURE_METRICS)."""
+    if "neutral" not in raw_sequences:
+        return {}
+    limits = {}
+    neutral = np.median(raw_sequences["neutral"], axis=0)
+    for gesture_id in WINK_GESTURES:
+        if gesture_id not in raw_sequences:
+            continue
+        gesture = np.median(raw_sequences[gesture_id], axis=0)
+        # El nombre de la métrica sigue la imagen, no a la persona: se elige el ojo que más se cierra.
+        closures = {name: float(neutral[FEATURE_METRICS.index(name)] - gesture[FEATURE_METRICS.index(name)]) for name in EYE_METRICS}
+        metric = max(closures, key=closures.get)
+        if closures[metric] >= MIN_EYE_CLOSURE:
+            index = FEATURE_METRICS.index(metric)
+            limits[gesture_id] = {"metric": metric, "max": round(float(neutral[index] + gesture[index]) / 2.0, 4)}
+    neutral_smile = [_smile_score(sample) for sample in samples_by_gesture.get("neutral", [])]
+    gesture_smile = [_smile_score(sample) for sample in samples_by_gesture.get("smile", [])]
+    if neutral_smile and gesture_smile and None not in neutral_smile and None not in gesture_smile:
+        low, high = float(np.median(neutral_smile)), float(np.median(gesture_smile))
+        if high - low >= MIN_SMILE_RISE:
+            limits["smile"] = {"blendshape": "smile", "min": round((low + high) / 2.0, 4)}
+    return limits
 
 
 class DeterministicGRUEncoder:
@@ -235,6 +275,7 @@ class GestureClassifier:
         self.training_summary: dict = {}
         self.active_version: int | None = None
         self.active_dataset_path = None
+        self.signal_limits: dict | None = None
 
     def _split_windows_temporally(
         self, windows_by_gesture: dict[str, list[np.ndarray]]
@@ -345,6 +386,19 @@ class GestureClassifier:
             payload.get("neutral_mean"),
             payload.get("neutral_std"),
         )
+        self.signal_limits = payload.get("signal_limits")
+
+    def verify_signal(self, gesture_id: str, sample: FaceSample | None) -> bool | None:
+        """True/False si la señal confirma o no el gesto; None si este gesto no se puede verificar."""
+        limit = (self.signal_limits or {}).get(gesture_id)
+        if limit is None or sample is None:
+            return None
+        if "blendshape" in limit:
+            score = _smile_score(sample)
+            return None if score is None else score >= limit["min"]
+        use_precise = self.extractor.metric_source == "precise" and sample.points_precise
+        values = feature_metrics(sample.points_precise if use_precise else sample.points_px, sample.metrics)
+        return values[FEATURE_METRICS.index(limit["metric"])] <= limit["max"]
 
     def load(self, version: int | None = None) -> bool:
         registry = self._load_registry()
@@ -384,6 +438,7 @@ class GestureClassifier:
                 "metric_source": self.extractor.metric_source,
                 "neutral_mean": None if self.extractor.neutral_mean is None else self.extractor.neutral_mean.tolist(),
                 "neutral_std": None if self.extractor.neutral_std is None else self.extractor.neutral_std.tolist(),
+                "signal_limits": self.signal_limits,
             },
             self.model_path,
         )
@@ -428,6 +483,7 @@ class GestureClassifier:
         raw_sequences = {gesture_id: self.extractor.raw_sequence(samples) for gesture_id, samples in usable.items()}
         neutral_mean, neutral_std = self._neutral_statistics(raw_sequences.get("neutral"))
         self.extractor.configure(FEATURE_VERSION, metric_source, neutral_mean, neutral_std)
+        self.signal_limits = compute_signal_limits(raw_sequences, usable)
         for gesture_id, raw_sequence in raw_sequences.items():
             sequence = self.extractor.normalize(raw_sequence)
             windows_by_gesture[gesture_id] = [
@@ -514,6 +570,7 @@ class GestureClassifier:
             "windows_per_step": class_windows,
             "hard_negative_false_alarm_rate": hard_negative_false_alarm_rate,
             "model_type": "StandardScaler + LogisticRegression",
+            "signal_limits": self.signal_limits,
             "feature_version": self.extractor.feature_version,
             "metric_source": self.extractor.metric_source,
             "model_path": str(self.model_path),

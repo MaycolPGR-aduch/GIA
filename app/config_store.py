@@ -14,6 +14,7 @@ PROFILE_DIR = CONFIG_DIR / "user_profiles"
 DATA_DIR = BASE_DIR / "data"
 CALIBRATION_DIR = DATA_DIR / "calibration"
 LOG_DIR = DATA_DIR / "logs"
+USAGE_RECORDING_DIR = DATA_DIR / "usage_recordings"
 MODEL_DIR = DATA_DIR / "models"
 
 SETTINGS_PATH = CONFIG_DIR / "settings.json"
@@ -222,7 +223,7 @@ def delete_profile(profile_name: str) -> None:
     profile_path = PROFILE_DIR / f"{profile_name}.json"
     if profile_path.exists():
         profile_path.unlink()
-        
+
     # Limpiar también la carpeta de calibración
     calib_dir = CALIBRATION_DIR / profile_name
     if calib_dir.exists():

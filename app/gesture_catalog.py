@@ -98,7 +98,9 @@ GESTURE_CATALOG = [
         "action": "Confirmar selección actual (tecla Enter)",
         "duration_ms": 650,
         "warning": "Pulsa Enter en la ventana activa; no actúa con el sistema en pausa.",
-        "training_hint": "Levanta las dos cejas con claridad y mantenlas arriba, mirando al frente.",
+        "training_hint": (
+            "Levanta las dos cejas como lo harás al usar GIA, sin forzarlas, y mantenlas arriba mirando al frente."
+        ),
         "common_failure_hint": "No gires la cabeza ni abras la boca durante la captura.",
         "success_hint": "Cejas bien marcadas: el perfil podrá pulsar Enter con este gesto.",
         "recommended_min_frames": 30,

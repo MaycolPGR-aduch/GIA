@@ -16,13 +16,19 @@ from .audio_utils import AudioLevelMonitor, capture_voice_clip, friendly_audio_e
 from .config_store import parse_camera_resolution
 from .gesture_catalog import GESTURE_CATALOG, clamp_confidence_threshold
 from .gesture_ml import GestureClassifier, ProbabilitySmoother
-from .global_hotkey import EMERGENCY_HOTKEY_LABEL, GlobalHotkey
+from .global_hotkey import (
+    EMERGENCY_HOTKEY_LABEL,
+    MARK_ERROR_HOTKEY_LABEL,
+    MARK_SEGMENT_HOTKEY_LABEL,
+    GlobalHotkey,
+)
 from .heuristic_engine import HeuristicEngine
 from .inference_service import InferenceService
 from .landmark_provider import LandmarkProvider
 from .models import AppState, FaceSample, GesturePrediction
 from .session_logger import SessionLogger
 from .speech import SpeechQueue
+from .usage_recorder import UsageRecorder
 from .voice_router import resolve_command_entry
 
 
@@ -115,6 +121,8 @@ class AssistiveController:
         )
 
         self.emergency_hotkey = GlobalHotkey(self._emergency_toggle_pause)
+        self.usage_recorder = None
+        self._usage_hotkeys = []
         self.cap = None
         self.camera_state = "abriendo"
         self._camera_ok_since = None
@@ -228,6 +236,7 @@ class AssistiveController:
             "model_loaded": self.classifier.model is not None,
             "model_version": self.classifier.active_version,
             "model_feature_version": self.classifier.feature_version,
+            "model_signal_check": self.classifier.signal_limits is not None,
             "model_accuracy": summary.get("validation_accuracy"),
             "hotkey_registered": bool(self.emergency_hotkey.registered),
         }
@@ -238,6 +247,7 @@ class AssistiveController:
         self.running = False
         self.state = AppState.STOPPED
         self.emergency_hotkey.stop()
+        self._usage_summary_on_stop = self.stop_usage_recording()
         if self.control_thread and self.control_thread.is_alive():
             self.control_thread.join(timeout=3)
         if self.cap and self.cap.isOpened():
@@ -345,6 +355,7 @@ class AssistiveController:
                 self._last_face_seen_at = time.monotonic()
             control_state = self.heuristics.update(snapshot.face_sample)
             prediction, inference_result = self._evaluate_gesture(snapshot.face_sample, control_state)
+            self._record_usage(snapshot.face_sample, control_state, prediction, inference_result)
             self._apply_continuous_control(control_state)
             if self._gui_wants_frame():
                 compact = self._gui_is_compact()
@@ -441,6 +452,7 @@ class AssistiveController:
             self._cursor_status_text(),
             allow_low_confidence=allow_low_confidence,
             cursor_active=self.cursor_active,
+            signal_verified=self.classifier.verify_signal(prediction.gesture_id, sample) if prediction else None,
         )
         self.last_rejection_reason = result.rejection_reason or "-"
         self.last_diagnostic_hint = result.diagnostic_hint or "-"
@@ -484,6 +496,80 @@ class AssistiveController:
             throttle=not result.executed,
         )
         return prediction, result
+
+    # ---------------------------------------------------------- grabación de uso
+    def start_usage_recording(self) -> str:
+        """Empieza a grabar puntos faciales y decisiones (sin video ni audio)."""
+        if self.usage_recorder is not None:
+            return str(self.usage_recorder.path)
+        summary = self.classifier.training_summary or {}
+        recorder = UsageRecorder(
+            self.profile["name"],
+            {
+                "model_version": self.classifier.active_version,
+                "feature_version": self.classifier.feature_version,
+                "metric_source": self.classifier.extractor.metric_source,
+                "validation_accuracy": summary.get("validation_accuracy"),
+                "thresholds": self.profile.get("gesture_confidence", {}),
+                "durations_ms": self.profile.get("gesture_duration_ms", {}),
+                "cooldowns_ms": self.profile.get("gesture_cooldown_ms", {}),
+                "smoothing_alpha": self.prediction_smoother.alpha,
+                "screen": [self.screen_width, self.screen_height],
+            },
+        )
+        path = recorder.start()
+        self.usage_recorder = recorder
+        self._usage_hotkeys = [
+            GlobalHotkey(lambda: self.mark_usage("error"), key="E"),
+            GlobalHotkey(lambda: self.mark_usage("segment"), key="N"),
+        ]
+        for hotkey in self._usage_hotkeys:
+            hotkey.start()
+        self.logger.log("usage", "Grabación de uso iniciada", path=str(path))
+        self._publish_event(
+            f"Grabación de uso iniciada. {MARK_ERROR_HOTKEY_LABEL} marca un error; "
+            f"{MARK_SEGMENT_HOTKEY_LABEL} marca el cambio de tramo."
+        )
+        return str(path)
+
+    def stop_usage_recording(self) -> dict | None:
+        recorder = getattr(self, "usage_recorder", None)
+        if recorder is None:
+            return None
+        self.usage_recorder = None
+        for hotkey in self._usage_hotkeys:
+            hotkey.stop()
+        self._usage_hotkeys = []
+        summary = recorder.stop()
+        self.logger.log("usage", "Grabación de uso finalizada", **summary)
+        self._publish_event(f"Grabación de uso guardada: {summary['path']}")
+        return summary
+
+    def mark_usage(self, kind: str) -> None:
+        recorder = self.usage_recorder
+        if recorder is None:
+            return
+        recorder.mark(kind)
+        label = "error" if kind == "error" else "cambio de tramo"
+        self._publish_event(f"Marcado {label} ({recorder.markers[kind]}) en {recorder.elapsed_s:.0f} s.")
+
+    def _record_usage(self, sample, control_state, prediction, result) -> None:
+        recorder = self.usage_recorder
+        if recorder is None:
+            return
+        recorder.record_frame(
+            sample,
+            state=self.state.value,
+            cursor_active=bool(self.cursor_active),
+            precision=bool(self.precision_mode),
+            steering=bool(control_state.steering),
+            face_stable=bool(control_state.face_stable),
+            gesture=prediction.gesture_id if prediction else None,
+            confidence=round(float(prediction.confidence), 4) if prediction else None,
+            runtime_state=result.runtime_state,
+            rejection=result.rejection_reason or "",
+            executed=bool(result.executed),
+        )
 
     def _update_click_anchor(self):
         """Guarda dónde estaba el cursor al empezar un guiño: el clic se hace ahí."""
@@ -612,8 +698,8 @@ class AssistiveController:
             )
             if audio_diag["peak"] < 1e-4:
                 raise RuntimeError(
-                    "El micrófono no entrega señal (silencio absoluto). Revisa que no esté silenciado "
-                    "y que Windows lo permita en Privacidad > Micrófono."
+                    "El micrófono no entrega señal (silencio absoluto). Revisa que esté conectado, que no esté "
+                    "silenciado y que Windows lo permita en Privacidad > Micrófono."
                 )
             segments, _ = self.whisper.transcribe(
                 AUDIO_RECORDING_PATH,
@@ -924,6 +1010,7 @@ class AssistiveController:
             "fps_real": round(float(getattr(self, "fps_real", 0.0) or 0.0), 1),
             "hold_progress": round(float(hold_progress or 0.0), 3),
             "precision_mode": bool(getattr(self, "precision_mode", False)),
+            "usage_recording_s": recorder.elapsed_s if (recorder := getattr(self, "usage_recorder", None)) else None,
             "voice_model_state": getattr(self, "voice_model_state", "lista"),
             **mic_payload,
         }
