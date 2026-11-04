@@ -45,6 +45,7 @@ REFERENCE_CURSOR_FPS = 15.0
 PRECISION_SPEED_FACTOR = 0.35
 # Gestos que hacen clic en la posición del cursor: lo congelan mientras se validan.
 POSITIONAL_GESTURES = {"left_blink_intent", "right_blink_intent"}
+BROW_SIGNAL_CONFIDENCE = 0.9
 GESTURE_LABELS = {
     gesture["id"]: (gesture.get("short_title", gesture["title"]), gesture.get("short_action", gesture["action"]))
     for gesture in GESTURE_CATALOG
@@ -78,6 +79,9 @@ class AssistiveController:
         self.inference = InferenceService(profile, self.window_size)
 
         pyautogui.FAILSAFE = False
+        # Por defecto pyautogui duerme 100 ms tras cada llamada: con el cursor moviéndose
+        # frenaba todo el bucle de cámara a 8 FPS.
+        pyautogui.PAUSE = 0
         self.screen_width, self.screen_height = pyautogui.size()
         self.current_cursor_x, self.current_cursor_y = pyautogui.position()
         # Posición en coma flotante para no perder los desplazamientos de menos de 1 px.
@@ -236,7 +240,7 @@ class AssistiveController:
             "model_loaded": self.classifier.model is not None,
             "model_version": self.classifier.active_version,
             "model_feature_version": self.classifier.feature_version,
-            "model_signal_check": self.classifier.signal_limits is not None,
+            "model_needs_refresh": self.classifier.needs_refresh,
             "model_accuracy": summary.get("validation_accuracy"),
             "hotkey_registered": bool(self.emergency_hotkey.registered),
         }
@@ -443,6 +447,8 @@ class AssistiveController:
         if self._should_use_heuristic_blink(prediction, heuristic_prediction):
             prediction = heuristic_prediction
 
+        prediction = self._apply_brow_signal(prediction, sample)
+
         allow_low_confidence = bool(prediction and self._passes_hybrid_gesture_validation(prediction, sample))
         result = self.inference.evaluate(
             sample,
@@ -570,6 +576,23 @@ class AssistiveController:
             rejection=result.rejection_reason or "",
             executed=bool(result.executed),
         )
+
+    def _apply_brow_signal(self, prediction, sample):
+        """Con las cejas arriba según MediaPipe, cuenta como "cejas" salvo otro gesto claro del modelo.
+
+        El modelo por sí solo confunde las cejas con inclinar la cabeza y a veces no las ve.
+        """
+        if self.classifier.verify_signal("confirm", sample) is not True:
+            return prediction
+        model_confidence = 0.0
+        if prediction is not None:
+            if prediction.gesture_id == "confirm":
+                model_confidence = prediction.confidence
+            elif prediction.gesture_id != "neutral":
+                threshold = clamp_confidence_threshold(self.profile.get("gesture_confidence", {}).get(prediction.gesture_id, 0.6))
+                if prediction.confidence >= threshold and self.classifier.verify_signal(prediction.gesture_id, sample) is not False:
+                    return prediction
+        return GesturePrediction("confirm", max(model_confidence, BROW_SIGNAL_CONFIDENCE), False, "Cejas por señal")
 
     def _update_click_anchor(self):
         """Guarda dónde estaba el cursor al empezar un guiño: el clic se hace ahí."""
@@ -902,8 +925,9 @@ class AssistiveController:
             and (right_eye_ratio - left_eye_ratio) >= self.heuristic_blink_asymmetry_min
             and asymmetry >= self.heuristic_blink_asymmetry_min
         ):
+            # Las métricas siguen la imagen sin espejar: "left_eye_ratio" es el ojo derecho de la persona.
             return GesturePrediction(
-                gesture_id="left_blink_intent",
+                gesture_id="right_blink_intent",
                 confidence=self.heuristic_blink_confidence,
                 accepted=False,
                 reason="Fallback heuristico ocular",
@@ -916,7 +940,7 @@ class AssistiveController:
             and asymmetry >= self.heuristic_blink_asymmetry_min
         ):
             return GesturePrediction(
-                gesture_id="right_blink_intent",
+                gesture_id="left_blink_intent",
                 confidence=self.heuristic_blink_confidence,
                 accepted=False,
                 reason="Fallback heuristico ocular",

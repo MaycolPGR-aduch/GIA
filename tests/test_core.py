@@ -368,9 +368,10 @@ class CoreTests(unittest.TestCase):
         sample.metrics["left_eye_ratio"] = 0.14
         sample.metrics["right_eye_ratio"] = 0.24
 
+        # Las métricas siguen la imagen: cerrar "left_eye_ratio" es guiñar el ojo derecho de la persona.
         prediction = controller._build_heuristic_blink_prediction(sample)
         self.assertIsNotNone(prediction)
-        self.assertEqual(prediction.gesture_id, "left_blink_intent")
+        self.assertEqual(prediction.gesture_id, "right_blink_intent")
         self.assertAlmostEqual(prediction.confidence, 0.72)
 
     def test_heuristic_blink_prediction_ignores_both_eyes_closed(self):
@@ -1256,7 +1257,7 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(evaluate(InferenceService(profile, 4), signal_verified=True).runtime_state, "validando gesto")
 
     def test_preflight_warns_when_model_has_no_signal_check(self):
-        checks = {c.key: c for c in evaluate_preflight(self._preflight_snapshot(model_signal_check=False), 2.0, 0.3)}
+        checks = {c.key: c for c in evaluate_preflight(self._preflight_snapshot(model_needs_refresh=True), 2.0, 0.3)}
         self.assertEqual(checks["model"].status, "warning")
 
     def test_fit_saves_signal_limits_and_old_models_have_none(self):
@@ -1279,6 +1280,125 @@ class CoreTests(unittest.TestCase):
         finally:
             if profile_dir.exists():
                 rmtree(profile_dir)
+
+    def test_signal_limits_and_verification_for_raised_brows(self):
+        def with_brows(value):
+            sample = make_sample(1)
+            sample.blendshapes = {"browInnerUp": value, "browOuterUpLeft": 0.0, "browOuterUpRight": 0.0}
+            return sample
+
+        raw = {"neutral": self._metric_rows()}
+        samples = {"neutral": [with_brows(0.0)] * 3, "confirm": [with_brows(0.4)] * 3}
+        limits = compute_signal_limits(raw, samples)
+        self.assertEqual(limits["confirm"], {"blendshape": "brow", "min": 0.2})
+        classifier = GestureClassifier(f"test_brow_{uuid.uuid4().hex[:8]}")
+        rmtree(classifier.profile_dir, ignore_errors=True)
+        classifier.signal_limits = limits
+        self.assertTrue(classifier.verify_signal("confirm", with_brows(0.3)))
+        self.assertFalse(classifier.verify_signal("confirm", with_brows(0.05)))
+        self.assertIsNone(classifier.verify_signal("confirm", make_sample(1)))  # dataset sin blendshapes
+
+    def _brow_controller(self, *, raised=True, limits=None):
+        controller = AssistiveController.__new__(AssistiveController)
+        controller.profile = {"gesture_confidence": {"left_blink_intent": 0.85}}
+        classifier = GestureClassifier.__new__(GestureClassifier)
+        classifier.extractor = GestureFeatureExtractor(window_size=4)
+        classifier.signal_limits = limits if limits is not None else {"confirm": {"blendshape": "brow", "min": 0.2}}
+        controller.classifier = classifier
+        sample = make_sample(1)
+        sample.blendshapes = {"browInnerUp": 0.3 if raised else 0.0}
+        return controller, sample
+
+    def test_raised_brows_become_confirm_unless_model_is_sure_of_other_gesture(self):
+        controller, sample = self._brow_controller()
+        for prediction in (None, GesturePrediction("neutral", 0.99, False), GesturePrediction("left_blink_intent", 0.5, False)):
+            result = controller._apply_brow_signal(prediction, sample)
+            self.assertEqual((result.gesture_id, result.confidence), ("confirm", 0.9))
+        sure = GesturePrediction("left_blink_intent", 0.95, False)
+        self.assertIs(controller._apply_brow_signal(sure, sample), sure)
+        self.assertEqual(controller._apply_brow_signal(GesturePrediction("confirm", 0.97, False), sample).confidence, 0.97)
+
+    def test_confident_gesture_rejected_by_its_signal_does_not_block_raised_brows(self):
+        controller, sample = self._brow_controller(
+            limits={"confirm": {"blendshape": "brow", "min": 0.2}, "left_blink_intent": {"metric": "right_eye_ratio", "max": 0.1}}
+        )
+        result = controller._apply_brow_signal(GesturePrediction("left_blink_intent", 0.95, False), sample)
+        self.assertEqual(result.gesture_id, "confirm")
+
+    def test_lowered_brows_or_missing_limit_leave_prediction_untouched(self):
+        prediction = GesturePrediction("neutral", 0.8, False)
+        controller, sample = self._brow_controller(raised=False)
+        self.assertIs(controller._apply_brow_signal(prediction, sample), prediction)
+        controller, sample = self._brow_controller(limits={})
+        self.assertIs(controller._apply_brow_signal(prediction, sample), prediction)
+        controller, _ = self._brow_controller()
+        self.assertIs(controller._apply_brow_signal(prediction, None), prediction)
+
+    def test_needs_refresh_flags_models_with_old_signal_limits(self):
+        classifier = GestureClassifier(f"test_refresh_{uuid.uuid4().hex[:8]}")
+        rmtree(classifier.profile_dir, ignore_errors=True)
+        self.assertFalse(classifier.needs_refresh)  # sin modelo no hay nada que actualizar
+        classifier.model = object()
+        classifier._apply_payload({"model": object(), "labels": [], "feature_version": 2, "signal_limits": {"smile": {}}})
+        self.assertEqual(classifier.signal_version, 1)
+        self.assertTrue(classifier.needs_refresh)
+        classifier._apply_payload({"model": object(), "labels": [], "feature_version": 2, "signal_limits": {}, "signal_version": 2})
+        self.assertFalse(classifier.needs_refresh)
+
+    def _latch_sequence(self, steps):
+        """Evalúa (segundo, gesto, confianza, señal) y devuelve los instantes ejecutados."""
+        profile = build_default_profile("latch")
+        profile["gesture_confidence"]["left_blink_intent"] = 0.85
+        profile["gesture_duration_ms"]["left_blink_intent"] = 200
+        profile["gesture_cooldown_ms"]["left_blink_intent"] = 500
+        service = InferenceService(profile, window_size=4)
+        state = type("State", (), {"face_stable": True, "status_text": "ok"})()
+        clock = {"now": 100.0}
+        fake = type("FakeTime", (), {"monotonic": staticmethod(lambda: clock["now"])})
+        executed = []
+        with mock.patch("app.inference_service.time", fake):
+            for at, gesture, confidence, signal in steps:
+                clock["now"] = 100.0 + at
+                prediction = GesturePrediction(gesture, confidence, False)
+                result = service.evaluate(make_sample(1), state, prediction, AppState.READY, "x", signal_verified=signal)
+                if result.executed:
+                    executed.append(at)
+        return executed
+
+    @staticmethod
+    def _timeline(start, end, gesture, confidence, signal, step=0.07):
+        return [(round(t, 2), gesture, confidence, signal) for t in np.arange(start, end, step)]
+
+    def test_same_gesture_repeats_without_a_neutral_prediction(self):
+        wink = "left_blink_intent"
+        # El ojo se abre y el modelo divaga con otro gesto: nunca predice neutral.
+        steps = (
+            self._timeline(0.0, 0.4, wink, 0.95, True)
+            + self._timeline(0.4, 1.0, "right_blink_intent", 0.5, False)
+            + self._timeline(1.0, 1.4, wink, 0.95, True)
+        )
+        executed = self._latch_sequence(steps)
+        self.assertEqual(len(executed), 2)
+        self.assertGreaterEqual(executed[1], 1.2)
+
+    def test_holding_a_gesture_does_not_repeat_it(self):
+        self.assertEqual(len(self._latch_sequence(self._timeline(0.0, 4.0, "left_blink_intent", 0.95, True))), 1)
+        # Sin verificación por señal cuenta la confianza; una caída breve tampoco libera.
+        steps = (
+            self._timeline(0.0, 1.0, "left_blink_intent", 0.95, None)
+            + self._timeline(1.0, 1.14, "left_blink_intent", 0.5, None)
+            + self._timeline(1.14, 3.0, "left_blink_intent", 0.95, None)
+        )
+        self.assertEqual(len(self._latch_sequence(steps)), 1)
+
+    def test_latch_releases_when_signal_stops_confirming_the_gesture(self):
+        # El modelo insiste con confianza alta, pero el ojo ya está abierto.
+        steps = (
+            self._timeline(0.0, 0.4, "left_blink_intent", 0.95, True)
+            + self._timeline(0.4, 1.0, "left_blink_intent", 0.95, False)
+            + self._timeline(1.0, 1.4, "left_blink_intent", 0.95, True)
+        )
+        self.assertEqual(len(self._latch_sequence(steps)), 2)
 
 if __name__ == "__main__":
     unittest.main()

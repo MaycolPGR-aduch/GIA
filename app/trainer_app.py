@@ -43,7 +43,6 @@ from app.config_store import (
     save_profile,
     save_settings,
 )
-from app.gesture_ml import FEATURE_VERSION
 from app.gesture_catalog import GESTURE_CATALOG, NEUTRAL_DYNAMIC_META, NEUTRAL_GESTURE_META, get_enabled_gesture_catalog
 from app.qt_helpers import CameraThread
 from app.training_service import TrainingService
@@ -1016,11 +1015,7 @@ class TrainerMainWindow(QMainWindow):
 
     def _refresh_upgrade_button(self):
         classifier = self.training_service.classifier if self.training_service else None
-        needs_upgrade = bool(
-            classifier
-            and classifier.model is not None
-            and (classifier.feature_version < FEATURE_VERSION or classifier.signal_limits is None)
-        )
+        needs_upgrade = bool(classifier and classifier.needs_refresh)
         self.btn_upgrade.setVisible(needs_upgrade)
 
     def _on_training_succeeded(self, classifier):

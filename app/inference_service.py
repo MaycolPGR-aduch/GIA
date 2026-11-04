@@ -10,6 +10,9 @@ from .models import AppState, FaceSample, GestureInferenceResult, GesturePredict
 # Hueco máximo (≈3 fotogramas a 15 FPS) sin una predicción confiable del mismo gesto antes
 # de reiniciar el conteo de duración: "sostener N ms" exige sostenerlo de forma continua.
 GESTURE_CONTINUITY_GAP_S = 0.25
+# Tras ejecutarse, un gesto no se repite mientras se mantiene; se libera cuando lleva este
+# tiempo sin estar presente, sin esperar a que el modelo prediga exactamente "neutral".
+LATCH_RELEASE_S = 0.3
 # Gestos que actúan en la posición del cursor (o en la ventana activa): con el cursor
 # moviéndose, la cabeza girada deforma las métricas, así que solo se aceptan si la señal
 # confirma el gesto; los que no se pueden verificar exigen la cabeza cerca del centro.
@@ -27,6 +30,7 @@ class InferenceService:
         self.current_gesture_started_at = 0.0
         self.current_gesture_last_seen_at = 0.0
         self.latched_gesture = None
+        self.latched_seen_at = 0.0
         self.last_action_at: dict[str, float] = {}
         self.last_reason_signature = None
 
@@ -82,6 +86,8 @@ class InferenceService:
                 runtime_state="listo",
                 diagnostic_hint="El modelo detecta un estado neutral estable.",
             )
+
+        self._update_latch(prediction, signal_verified)
 
         if not is_gesture_enabled(prediction.gesture_id):
             return self._reject(
@@ -209,6 +215,7 @@ class InferenceService:
         prediction.accepted = True
         prediction.reason = "Gesto aceptado"
         self.latched_gesture = prediction.gesture_id
+        self.latched_seen_at = now
         self.last_action_at[prediction.gesture_id] = now
         self.last_reason_signature = None
         return GestureInferenceResult(
@@ -223,6 +230,19 @@ class InferenceService:
             diagnostic_hint="El gesto superó confianza, duración y cooldown.",
             hold_progress=1.0,
         )
+
+    def _update_latch(self, prediction: GesturePrediction, signal_verified: bool | None) -> None:
+        """Libera el gesto enclavado cuando deja de estar presente (ver LATCH_RELEASE_S)."""
+        if self.latched_gesture is None:
+            return
+        now = time.monotonic()
+        if prediction.gesture_id == self.latched_gesture and signal_verified is not False:
+            threshold = clamp_confidence_threshold(self.gesture_thresholds.get(prediction.gesture_id, 0.6))
+            if signal_verified or prediction.confidence >= threshold:
+                self.latched_seen_at = now
+                return
+        if now - self.latched_seen_at >= LATCH_RELEASE_S:
+            self.latched_gesture = None
 
     def gesture_in_progress(self, now: float | None = None) -> str | None:
         """Gesto que se está sosteniendo ahora mismo (con predicciones confiables recientes)."""
