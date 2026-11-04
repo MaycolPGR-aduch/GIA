@@ -21,8 +21,10 @@ Construir una base sólida para un sistema asistivo:
 ## Estado Actual
 
 La versión actual implementa:
-* **GIA Trainer** (`main_trainer.py`): Panel para crear, seleccionar y configurar perfiles, realizar pruebas de diagnóstico de cámara/audio, ver guías de gestos y ejecutar la captura guiada de muestras.
-* **GIA Runtime Assistant** (`main.py`): Ejecución del asistente facial en tiempo real con bucles de procesamiento en un hilo independiente (`QThread`) para evitar bloqueos. Incluye estados visuales, logs de comandos y consola de voz.
+* **Aplicación única** (`main.py`): Una sola ventana con tres pantallas que comparten la cámara sin chocar.
+  * **Inicio**: perfiles, su estado y la acción recomendada para cada uno. Puede iniciar el asistente solo con el último perfil (con 5 s para cancelar).
+  * **Calibrar y entrenar**: diagnóstico de cámara y audio, guía de gestos, captura guiada y entrenamiento del modelo.
+  * **Asistente**: control facial en tiempo real, con el bucle de cámara en un hilo independiente para evitar bloqueos. Terminar la sesión vuelve al inicio.
 * **Modo Compacto Flotante**: Widget superior sin marco (`FramelessWindow`) con feed circular recortado de cámara, indicadores básicos y log compacto.
 * **Modelo Híbrido Temporal**: Extractor secuencial GRU (NumPy) y clasificación local con Regresión Logística.
 
@@ -33,11 +35,15 @@ La versión actual implementa:
 La app está dividida en módulos con responsabilidades separadas:
 
 ```text
-main.py                -> Punto de entrada para el Runtime Asistivo
-main_trainer.py        -> Punto de entrada para el Calibrador/Entrenador
+main.py                -> Punto de entrada de GIA
+main_trainer.py        -> Acceso directo: abre GIA en Calibrar y entrenar
 app/
-  assistive_controls.py -> Controlador central del runtime (audio, mouse, logs)
-  trainer_app.py       -> Aplicación de entrenamiento en PySide6
+  main_window.py       -> Ventana única: coordina las pantallas y la cámara
+  home_page.py         -> Pantalla de inicio y gestión de perfiles
+  trainer_app.py       -> Pantalla de calibración y entrenamiento
+  runtime_app.py       -> Pantalla del asistente en uso
+  assistive_controls.py -> Controlador central de la sesión (audio, mouse, logs)
+  app_runtime.py       -> Instancia única y registro de errores
   runtime_app.py       -> Aplicación asistiva principal en PySide6
   qt_helpers.py        -> Hilos de cámara QThread y estilos QSS de Qt6
   config_store.py      -> Configuración y almacenamiento de perfiles
@@ -82,26 +88,24 @@ pip install -r requirements.txt
 
 ## Ejecución
 
-El sistema se divide en dos fases operativas:
-
-### 1. Fase de Calibración y Entrenamiento
-Para crear un nuevo perfil de usuario, probar el hardware o calibrar gestos por primera vez, ejecuta el calibrador:
-```powershell
-python main_trainer.py
-```
-* **Uso**:
-  1. Crea o selecciona un perfil.
-  2. Ajusta la sensibilidad y zona muerta en la pestaña *Diagnóstico*.
-  3. Selecciona cada gesto y haz clic en *Capturar* para registrar las muestras (cuenta regresiva de 3s).
-  4. Ve a la pestaña *Entrenamiento* y haz clic en *Entrenar Modelo*.
-
-### 2. Fase de Uso Diario (Runtime Asistivo)
-Una vez calibrado el perfil, inicia el asistente de movilidad:
+Todo se hace desde la misma aplicación:
 ```powershell
 python main.py
 ```
+Opciones: `--no-autostart` no inicia el asistente automáticamente; `--train [PERFIL]` abre directamente *Calibrar y entrenar*.
+
+Solo puede haber una GIA abierta a la vez. Los errores inesperados se guardan en `data/logs/errores_gia.log`.
+
+### 1. Fase de Calibración y Entrenamiento
 * **Uso**:
-  1. Selecciona el perfil calibrado en el dropdown y haz clic en *Iniciar*.
+  1. En *Inicio*, crea un perfil con *Nuevo perfil*, o selecciona uno y pulsa *Calibrar y entrenar*.
+  2. Ajusta la sensibilidad y zona muerta en el paso *Diagnóstico*.
+  3. Selecciona cada gesto y haz clic en *Capturar* para registrar las muestras (cuenta regresiva de 3s).
+  4. Ve al paso *Entrenamiento*, haz clic en *Entrenar modelo* y luego en *Probar ahora*.
+
+### 2. Fase de Uso Diario (Runtime Asistivo)
+* **Uso**:
+  1. En *Inicio*, selecciona el perfil calibrado y pulsa *Iniciar asistente*, o espera el inicio automático.
   2. El asistente comenzará a mover el cursor según la posición de tu nariz.
   3. Ejecuta gestos faciales (guiños, cejas arriba, sonrisa) para hacer clics o pausar el sistema.
   4. Mantén ambos ojos cerrados (900 ms) para activar los comandos de voz de Whisper.
@@ -120,5 +124,5 @@ El sistema ya no clasifica frames de manera estática. Utiliza un enfoque tempor
 
 Para ejecutar las pruebas de regresión de los componentes y algoritmos del sistema:
 ```powershell
-venv\Scripts\python.exe -m unittest tests.test_core
+venv\Scripts\python.exe -m unittest tests.test_core tests.test_app_shell
 ```

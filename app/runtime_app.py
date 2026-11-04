@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import sys
 import time
 import webbrowser
 from html import escape
 
 from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -15,7 +14,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QMainWindow,
     QMessageBox,
     QScrollArea,
     QSizePolicy,
@@ -87,7 +85,7 @@ PREFLIGHT_STYLES = {
 class PreflightDialog(QDialog):
     """Verificación previa en vivo: cámara, rostro, micrófono, voz, modelo y atajo de emergencia."""
 
-    def __init__(self, parent: RuntimeMainWindow, controller):
+    def __init__(self, parent: AssistantPage, controller):
         super().__init__(parent)
         self.controller = controller
         self.setWindowTitle("GIA · Verificación del sistema")
@@ -204,7 +202,7 @@ class RuntimeSignals(QObject):
 class CompactWindow(QWidget):
     """Barra flotante mínima para usar el PC con la interfaz reducida."""
 
-    def __init__(self, parent_gui: RuntimeMainWindow):
+    def __init__(self, parent_gui: AssistantPage):
         super().__init__()
         self.parent_gui = parent_gui
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.SubWindow)
@@ -275,7 +273,11 @@ class CompactWindow(QWidget):
         super().moveEvent(event)
 
 
-class RuntimeMainWindow(QMainWindow):
+class AssistantPage(QWidget):
+    """Pantalla del asistente en uso. Se crea una por sesión."""
+
+    session_end_requested = Signal()
+
     def __init__(self):
         super().__init__()
         self.controller = None
@@ -304,14 +306,7 @@ class RuntimeMainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ UI
     def init_ui(self):
-        self.setWindowTitle("GIA · Asistente facial")
-        screen = QApplication.primaryScreen().availableGeometry()
-        self.resize(min(1180, int(screen.width() * 0.94)), min(720, int(screen.height() * 0.9)))
-
-        root = QWidget()
-        root.setObjectName("appRoot")
-        self.setCentralWidget(root)
-        main = QVBoxLayout(root)
+        main = QVBoxLayout(self)
         main.setContentsMargins(14, 14, 14, 14)
         main.setSpacing(12)
 
@@ -452,7 +447,7 @@ class RuntimeMainWindow(QMainWindow):
             "Grabar uso", "record", tooltip="Guarda puntos faciales y decisiones para analizar errores; sin video ni audio (Ctrl+G)"
         )
         self.btn_record.clicked.connect(self._toggle_usage_recording)
-        btn_close = Button("Cerrar", "power", variant="danger", tooltip="Terminar la sesión")
+        btn_close = Button("Terminar sesión", "power", variant="danger", tooltip="Termina la sesión y vuelve al inicio")
         btn_close.clicked.connect(self._confirm_quit)
 
         grid.addWidget(self.btn_pause, 0, 0)
@@ -876,7 +871,7 @@ class RuntimeMainWindow(QMainWindow):
         self.compact_window = CompactWindow(self)
         self.is_compact_mode = True
         self.compact_window.show()
-        self.hide()
+        self.window().hide()
         if self._last_payload:
             self.update_status(self._last_payload)
         self.append_event("Cambiado a modo compacto.")
@@ -885,10 +880,10 @@ class RuntimeMainWindow(QMainWindow):
         if not self.is_compact_mode:
             return
         self.is_compact_mode = False
+        self.window().show()
         if self.compact_window:
             self.compact_window.close()
             self.compact_window = None
-        self.show()
         self.append_event("Restaurada ventana completa.")
 
     def _toggle_compact(self):
@@ -905,27 +900,27 @@ class RuntimeMainWindow(QMainWindow):
             self.diag_section.set_expanded(False)
             self.log_section.setVisible(False)
             self.diag_section.setVisible(False)
-            self.showFullScreen()
+            self.window().showFullScreen()
             self.append_event("Modo presentación activado (F5 o Esc para salir).")
         else:
             theme.set_font_scale(self._pre_presentation_scale or 1.0)
             self.log_section.setVisible(True)
             self.diag_section.setVisible(True)
-            self.showNormal()
+            self.window().showNormal()
             self.append_event("Modo presentación desactivado.")
         self.btn_presentation.setChecked(self.presentation_mode)
 
     def _exit_special_modes(self):
         if self.presentation_mode:
             self.toggle_presentation_mode()
-        elif self.isFullScreen():
-            self.showNormal()
+        elif self.window().isFullScreen():
+            self.window().showNormal()
 
     def _toggle_fullscreen(self):
-        if self.isFullScreen():
-            self.showNormal()
+        if self.window().isFullScreen():
+            self.window().showNormal()
         else:
-            self.showFullScreen()
+            self.window().showFullScreen()
 
     def _toggle_contrast(self):
         enabled = theme.toggle_high_contrast(self._persisted_settings())
@@ -1013,41 +1008,24 @@ class RuntimeMainWindow(QMainWindow):
     def _confirm_quit(self):
         answer = QMessageBox.question(
             self,
-            "Cerrar GIA",
-            "¿Deseas terminar la sesión del asistente?",
+            "Terminar sesión",
+            "¿Terminar la sesión y volver al inicio?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
         if answer == QMessageBox.Yes:
-            self._quit()
+            self.request_end_session()
 
-    def _quit(self):
-        if self.controller:
-            self.controller.stop()
-        if self.compact_window:
-            self.compact_window.close()
-        self.close()
+    def request_end_session(self):
+        self.session_end_requested.emit()
 
-    def closeEvent(self, event: QCloseEvent):
-        if self.controller:
-            self.controller.stop()
-        if self.compact_window:
-            self.compact_window.close()
-        event.accept()
-
-
-def run_qt_runtime(profile: dict, settings: dict):
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication(sys.argv)
-        theme.apply_theme(app, settings)
-
-    window = RuntimeMainWindow()
-    from app.assistive_controls import AssistiveController
-    controller = AssistiveController(profile, settings, main_gui_interface=window)
-    window.set_controller(controller)
-    window.show()
-    controller.start()
-    if settings.get("preflight_on_start", True):
-        window.show_preflight_dialog()
-    sys.exit(app.exec())
+    def prepare_to_close(self):
+        """Deja la ventana como estaba antes de la sesión: sin modo compacto ni pantalla completa."""
+        if self.is_compact_mode:
+            self.exit_compact_mode()
+        if self.presentation_mode:
+            self.toggle_presentation_mode()
+        elif self.window().isFullScreen():
+            self.window().showNormal()
+        if self._preflight_dialog is not None:
+            self._preflight_dialog.close()

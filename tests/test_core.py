@@ -400,6 +400,7 @@ class CoreTests(unittest.TestCase):
 
     def test_voice_listener_uses_previous_state_for_resume_command(self):
         controller = AssistiveController.__new__(AssistiveController)
+        controller.running = True
         controller.state = AppState.PAUSED
         controller.last_voice_state = "-"
         controller.last_voice_text = "-"

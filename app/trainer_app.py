@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import sys
-
 import cv2
 from PySide6.QtCore import QSize, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -14,10 +11,8 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
-    QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QMainWindow,
     QMessageBox,
     QProgressBar,
     QScrollArea,
@@ -30,14 +25,11 @@ from PySide6.QtWidgets import (
 )
 
 from app import ui_theme as theme
+from app.app_runtime import log_exception
 from app.audio_utils import list_input_devices
 from app.calibration_service import CalibrationService
 from app.config_store import (
-    build_default_profile,
-    delete_profile,
     ensure_app_dirs,
-    get_profile_summary,
-    list_profiles,
     load_profile,
     load_settings,
     parse_camera_resolution,
@@ -57,19 +49,17 @@ from app.ui_widgets import (
     format_accuracy,
     icon,
     make_label,
-    populate_profile_list,
     set_label_text,
 )
 
 
 STEPS = [
-    ("Perfiles", "user", "Crea un perfil nuevo o carga uno existente."),
     ("Diagnóstico", "camera", "Comprueba la cámara y el micrófono, y ajusta el cursor."),
     ("Guía de gestos", "book", "Conoce cada gesto antes de calibrarlo."),
     ("Calibración", "record", "Captura muestras de cada gesto con la cámara."),
     ("Entrenamiento", "chip", "Entrena el modelo de gestos de este perfil."),
 ]
-STEP_PROFILES, STEP_DIAGNOSTICS, STEP_GUIDE, STEP_CALIBRATION, STEP_TRAINING = range(5)
+STEP_DIAGNOSTICS, STEP_GUIDE, STEP_CALIBRATION, STEP_TRAINING = range(4)
 
 READINESS = {
     "sin iniciar": ("Falta", "neutral"),
@@ -135,13 +125,16 @@ class GestureProgressItem(QWidget):
         self.meta.setText(f"{status.valid_frames} / {status.recommended_min_frames} fotogramas · {status.action}")
 
 
-class TrainerMainWindow(QMainWindow):
-    closed = Signal()
+class TrainerPage(QWidget):
+    """Calibrar y entrenar el perfil abierto. Los perfiles se gestionan en la pantalla de inicio."""
 
-    def __init__(self):
+    home_requested = Signal()
+    assistant_requested = Signal(str)
+
+    def __init__(self, settings: dict | None = None):
         super().__init__()
         ensure_app_dirs()
-        self.settings = load_settings()
+        self.settings = settings if settings is not None else load_settings()
         self.window_size = int(self.settings.get("gesture_window_size", 12))
 
         self.current_profile_name = ""
@@ -162,14 +155,7 @@ class TrainerMainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ UI
     def init_ui(self):
-        self.setWindowTitle("GIA · Entrenador y calibrador")
-        screen = QApplication.primaryScreen().availableGeometry()
-        self.resize(min(1180, int(screen.width() * 0.94)), min(740, int(screen.height() * 0.9)))
-
-        root = QWidget()
-        root.setObjectName("appRoot")
-        self.setCentralWidget(root)
-        main = QHBoxLayout(root)
+        main = QHBoxLayout(self)
         main.setContentsMargins(14, 14, 14, 14)
         main.setSpacing(14)
 
@@ -185,31 +171,27 @@ class TrainerMainWindow(QMainWindow):
         titles.addWidget(self.lbl_step_title)
         titles.addWidget(self.lbl_step_desc)
         header.addLayout(titles, 1)
-        self.profile_badge = StatusBadge("Sin perfil cargado", "neutral", large=True)
+        self.profile_badge = StatusBadge("", "neutral", large=True)
         header.addWidget(self.profile_badge, 0, Qt.AlignVCenter)
         content.addLayout(header)
 
         self.stack = QStackedWidget()
         content.addWidget(self.stack, 1)
+        self.lbl_status = make_label("", role="subtle")
+        content.addWidget(self.lbl_status)
+        self._status_timer = QTimer(self)
+        self._status_timer.setSingleShot(True)
+        self._status_timer.timeout.connect(lambda: self.lbl_status.setText(""))
         main.addLayout(content, 1)
 
         # Crear las diferentes páginas (mismo orden que STEPS)
-        self.create_profiles_tab()
         self.create_diagnostics_tab()
         self.create_guide_tab()
         self.create_calibration_tab()
         self.create_training_tab()
 
-        self.statusBar().showMessage("Carga o crea un perfil para empezar.")
-
-        self._set_step_enabled(STEP_DIAGNOSTICS, False)
-        self._set_step_enabled(STEP_CALIBRATION, False)
-        self._set_step_enabled(STEP_TRAINING, False)
-        self.step_list.setCurrentRow(STEP_PROFILES)
+        self.step_list.setCurrentRow(STEP_DIAGNOSTICS)
         theme.theme_state().changed.connect(self._refresh_step_icons)
-
-        # Cargar lista de perfiles inicial
-        self.refresh_profile_list()
         self.refresh_audio_device_selector()
 
     def _build_sidebar(self) -> QFrame:
@@ -229,7 +211,11 @@ class TrainerMainWindow(QMainWindow):
         brand_titles.addWidget(make_label("Calibración de gestos", role="subtle"))
         brand.addLayout(brand_titles, 1)
         layout.addLayout(brand)
-        layout.addSpacing(6)
+        layout.addSpacing(2)
+        self.btn_home = Button("Volver al inicio", "home", tooltip="Volver a la pantalla de perfiles")
+        self.btn_home.clicked.connect(self.home_requested)
+        layout.addWidget(self.btn_home)
+        layout.addSpacing(2)
 
         self.step_list = QListWidget()
         self.step_list.setObjectName("stepNav")
@@ -249,15 +235,7 @@ class TrainerMainWindow(QMainWindow):
         return sidebar
 
     # ------------------------------------------------------------ navegación
-    def _set_step_enabled(self, index: int, enabled: bool):
-        item = self.step_list.item(index)
-        flags = item.flags()
-        item.setFlags(flags | Qt.ItemIsEnabled | Qt.ItemIsSelectable if enabled else flags & ~Qt.ItemIsEnabled & ~Qt.ItemIsSelectable)
-        self._refresh_step_icons()
-
     def _step_done(self, index: int) -> bool:
-        if index == STEP_PROFILES:
-            return bool(self.current_profile_name)
         if index == STEP_CALIBRATION and self.calibration_service is not None:
             return self.calibration_service.can_train()[0]
         if index == STEP_TRAINING:
@@ -268,10 +246,7 @@ class TrainerMainWindow(QMainWindow):
         palette = theme.palette()
         for index, (_title, icon_name, _desc) in enumerate(STEPS):
             item = self.step_list.item(index)
-            if not item.flags() & Qt.ItemIsEnabled:
-                item.setIcon(icon("lock", palette["text_subtle"]))
-                item.setToolTip("Carga un perfil para habilitar este paso.")
-            elif self._step_done(index):
+            if self._step_done(index):
                 item.setIcon(icon("check", palette["success"]))
                 item.setToolTip("Completado")
             else:
@@ -299,6 +274,30 @@ class TrainerMainWindow(QMainWindow):
         enabled = theme.toggle_high_contrast(self.settings)
         self.btn_contrast.setChecked(enabled)
 
+    def _show_status(self, text: str, duration_ms: int = 5000):
+        self.lbl_status.setText(text)
+        self._status_timer.start(duration_ms)
+
+    def go_to_training(self):
+        self._go_to_step(STEP_TRAINING)
+
+    def can_leave(self) -> bool:
+        return self.training_worker is None
+
+    def release_camera(self):
+        """Suelta la cámara y conserva lo capturado, antes de cambiar de pantalla."""
+        capturing = self.is_capturing or self.countdown_timer.isActive()
+        self.countdown_timer.stop()
+        if capturing:
+            self.stop_capture_and_camera()
+        elif self.camera_thread:
+            self.stop_diag_camera()
+
+    def shutdown(self):
+        self.release_camera()
+        if self.training_worker is not None:
+            self.training_worker.wait(15000)
+
     # --------------------------------------------------------------- páginas
     @staticmethod
     def _page() -> tuple[QWidget, QHBoxLayout]:
@@ -315,49 +314,6 @@ class TrainerMainWindow(QMainWindow):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setWidget(widget)
         return scroll
-
-    def create_profiles_tab(self):
-        page, layout = self._page()
-
-        existing = Card("Perfiles existentes", "user")
-        self.profile_list = QListWidget()
-        self.profile_list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
-        self.profile_list.itemDoubleClicked.connect(lambda _item: self.load_selected_profile())
-        existing.body.addWidget(self.profile_list, 1)
-        row = QHBoxLayout()
-        btn_load = Button("Cargar perfil", "check", variant="primary")
-        btn_load.clicked.connect(self.load_selected_profile)
-        btn_delete = Button("Eliminar", "trash", variant="danger")
-        btn_delete.clicked.connect(self.delete_selected_profile)
-        row.addWidget(btn_load, 1)
-        row.addWidget(btn_delete)
-        existing.body.addLayout(row)
-        layout.addWidget(existing, 3)
-
-        create = Card("Crear perfil nuevo", "plus")
-        create.body.addWidget(make_label("Nombre del perfil", role="h2"))
-        self.txt_new_name = QLineEdit()
-        self.txt_new_name.setPlaceholderText("Ej. Juan")
-        self.txt_new_name.returnPressed.connect(self.create_new_profile)
-        create.body.addWidget(self.txt_new_name)
-        create.body.addSpacing(6)
-
-        self.check_voice = QCheckBox("Habilitar comandos de voz")
-        self.check_voice.setChecked(True)
-        create.body.addWidget(self.check_voice)
-        create.body.addWidget(make_label("Permite dar órdenes habladas cerrando ambos ojos.", role="subtle", wrap=True))
-
-        self.check_tts = QCheckBox("Habilitar respuesta hablada (TTS)")
-        self.check_tts.setChecked(False)
-        create.body.addWidget(self.check_tts)
-        create.body.addWidget(make_label("El sistema confirma en voz alta cada acción.", role="subtle", wrap=True))
-        create.body.addStretch(1)
-
-        btn_create = Button("Crear y cargar perfil", "plus", variant="primary")
-        btn_create.clicked.connect(self.create_new_profile)
-        create.body.addWidget(btn_create)
-        layout.addWidget(create, 2)
-        self.stack.addWidget(page)
 
     def create_diagnostics_tab(self):
         page, layout = self._page()
@@ -518,6 +474,10 @@ class TrainerMainWindow(QMainWindow):
         self.btn_upgrade.clicked.connect(self.run_model_upgrade)
         self.btn_upgrade.setVisible(False)
         action_row.addWidget(self.btn_upgrade)
+        self.btn_try = Button("Probar ahora", "play", size="large", tooltip="Inicia el asistente con este perfil")
+        self.btn_try.clicked.connect(lambda: self.assistant_requested.emit(self.current_profile_name))
+        self.btn_try.setVisible(False)
+        action_row.addWidget(self.btn_try)
         self.btn_train = Button("Entrenar modelo", "chip", variant="primary", size="large")
         self.btn_train.clicked.connect(self.run_training)
         action_row.addWidget(self.btn_train)
@@ -568,26 +528,20 @@ class TrainerMainWindow(QMainWindow):
         self.stack.addWidget(page)
 
     # --------------------------------------------------------------- perfiles
-    def refresh_profile_list(self):
-        summaries = [get_profile_summary(name) for name in list_profiles()]
-        populate_profile_list(self.profile_list, summaries, self.current_profile_name or None)
-
-    def _selected_profile_name(self) -> str:
-        item = self.profile_list.currentItem()
-        return item.data(Qt.UserRole) if item is not None else ""
-
-    def load_selected_profile(self):
-        name = self._selected_profile_name()
-        if not name:
-            return
-
+    def open_profile(self, name: str):
         self.current_profile_name = name
         self.profile = load_profile(name)
         self.calibration_service = CalibrationService(self.window_size)
         self.training_service = TrainingService(name, self.window_size)
 
         # Cargar dataset si existe
-        has_model = self.training_service.load_classifier()
+        # Un modelo dañado no debe impedir abrir el perfil: justo aquí es donde se puede reentrenar.
+        try:
+            has_model = self.training_service.load_classifier()
+        except Exception as exc:  # noqa: BLE001
+            log_exception(type(exc), exc, exc.__traceback__)
+            has_model = False
+            self._show_status("No se pudo leer el modelo de este perfil. Vuelve a entrenarlo.", 10000)
         pending = self.training_service.load_pending_samples()
         if pending is not None:
             samples, quality = pending
@@ -604,11 +558,7 @@ class TrainerMainWindow(QMainWindow):
         self.check_invert_x.setChecked(self.profile.get("invert_x", True))
         self.refresh_audio_device_selector()
 
-        # Habilitar pasos
-        self._set_step_enabled(STEP_DIAGNOSTICS, True)
-        self._set_step_enabled(STEP_CALIBRATION, True)
-        self._set_step_enabled(STEP_TRAINING, True)
-
+        self.btn_contrast.setChecked(theme.current_theme() == "high_contrast")
         calibrated = bool(self.profile.get("calibration", {}).get("completed"))
         self.profile_badge.set_status(f"Perfil: {name}", "success" if calibrated else "warning")
         self.refresh_gestures_list_widget()
@@ -620,52 +570,6 @@ class TrainerMainWindow(QMainWindow):
         self._update_train_status()
         self._refresh_step_icons()
         self._go_to_step(STEP_DIAGNOSTICS)
-        self.statusBar().showMessage(f"Perfil «{name}» cargado.", 5000)
-
-    def delete_selected_profile(self):
-        name = self._selected_profile_name()
-        if not name:
-            return
-
-        confirm = QMessageBox.question(
-            self,
-            "Confirmar eliminación",
-            f"¿Seguro que deseas eliminar permanentemente el perfil «{name}» y sus modelos?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if confirm == QMessageBox.Yes:
-            delete_profile(name)
-            if name == self.current_profile_name:
-                self.current_profile_name = ""
-                self.profile = {}
-                self.calibration_service = None
-                self.training_service = None
-                self.profile_badge.set_status("Sin perfil cargado", "neutral")
-                for step in (STEP_DIAGNOSTICS, STEP_CALIBRATION, STEP_TRAINING):
-                    self._set_step_enabled(step, False)
-            self.refresh_profile_list()
-            self.statusBar().showMessage(f"Perfil «{name}» eliminado.", 5000)
-
-    def create_new_profile(self):
-        name = self.txt_new_name.text().strip()
-        if not name:
-            QMessageBox.warning(self, "Nombre requerido", "Introduce un nombre para el perfil.")
-            return
-        if name in list_profiles():
-            QMessageBox.warning(self, "Perfil existente", f"Ya existe un perfil llamado «{name}».")
-            return
-
-        # Crear perfil
-        profile = build_default_profile(name)
-        profile["voice_enabled"] = self.check_voice.isChecked()
-        profile["tts_enabled"] = self.check_tts.isChecked()
-        save_profile(profile)
-
-        self.txt_new_name.clear()
-        self.current_profile_name = name
-        self.refresh_profile_list()
-        self.load_selected_profile()
 
     def save_quick_settings(self):
         if not self.profile:
@@ -679,7 +583,7 @@ class TrainerMainWindow(QMainWindow):
         save_profile(self.profile)
         self.settings["audio_input_device"] = self.cb_audio_input.currentData()
         save_settings(self.settings)
-        self.statusBar().showMessage("Ajustes del perfil y del micrófono guardados.", 5000)
+        self._show_status("Ajustes del perfil y del micrófono guardados.")
 
     def refresh_audio_device_selector(self):
         selected_device = self.settings.get("audio_input_device")
@@ -1005,6 +909,8 @@ class TrainerMainWindow(QMainWindow):
     def _start_training(self, samples: dict, quality: dict):
         self.btn_train.setEnabled(False)
         self.btn_upgrade.setEnabled(False)
+        self.btn_try.setEnabled(False)
+        self.btn_home.setEnabled(False)
         self.train_busy.setVisible(True)
         self.txt_train_status.setText("Entrenando el clasificador… la interfaz sigue disponible.")
         theme.set_widget_property(self.txt_train_status, "tone", "info")
@@ -1020,6 +926,7 @@ class TrainerMainWindow(QMainWindow):
         classifier = self.training_service.classifier if self.training_service else None
         needs_upgrade = bool(classifier and classifier.needs_refresh)
         self.btn_upgrade.setVisible(needs_upgrade)
+        self.btn_try.setVisible(bool(classifier and classifier.model is not None))
 
     def _on_training_succeeded(self, classifier):
         samples, quality = self._training_inputs
@@ -1042,8 +949,7 @@ class TrainerMainWindow(QMainWindow):
         theme.set_widget_property(self.txt_train_status, "tone", "success")
         self.profile_badge.set_status(f"Perfil: {self.current_profile_name}", "success")
         self.refresh_gestures_list_widget()
-        self.refresh_profile_list()
-        self.statusBar().showMessage("Entrenamiento completado.", 6000)
+        self._show_status("Entrenamiento completado.", 6000)
 
     def _on_training_failed(self, message: str):
         self.txt_train_status.setText(f"Error en el entrenamiento: {message}")
@@ -1054,6 +960,8 @@ class TrainerMainWindow(QMainWindow):
         self.training_worker = None
         self.btn_train.setEnabled(True)
         self.btn_upgrade.setEnabled(True)
+        self.btn_try.setEnabled(True)
+        self.btn_home.setEnabled(True)
         self.train_busy.setVisible(False)
         self._refresh_upgrade_button()
         self._refresh_step_icons()
@@ -1113,27 +1021,3 @@ class TrainerMainWindow(QMainWindow):
             f"ventana temporal de {summary.get('window_size', '-')} fotogramas · "
             f"{summary.get('model_type', 'LogisticRegression')} sobre embeddings GRU{false_alarm_text}."
         )
-
-    # -------------------------------------------------------------- cierre
-    def closeEvent(self, event):
-        # Apagar cámaras y salir
-        self.countdown_timer.stop()
-        if self.camera_thread:
-            self.camera_thread.stop()
-            self.camera_thread = None
-        if self.training_worker is not None:
-            self.training_worker.wait(15000)
-        event.accept()
-        self.closed.emit()
-
-
-def main():
-    app = QApplication(sys.argv)
-    theme.apply_theme(app, load_settings())
-    window = TrainerMainWindow()
-    window.show()
-    sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()

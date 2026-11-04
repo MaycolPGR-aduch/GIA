@@ -24,6 +24,7 @@ FACE_LANDMARKER_MODEL_PATH = MODEL_DIR / "face_landmarker.task"
 DEFAULT_SETTINGS = {
     "camera_index": 0,
     "camera_resolution": "1280x720",
+    "autostart_last_profile": True,
     "fps": 15,
     "cursor_sensitivity": 1.35,
     "dead_zone_px": 8,

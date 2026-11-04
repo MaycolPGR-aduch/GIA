@@ -1,5 +1,7 @@
+"""Acceso directo a Calibrar y entrenar: GIA se abre siempre desde main.py."""
 import sys
-from app.trainer_app import main
+
+from main import main
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main(["--train", *sys.argv[1:]]))

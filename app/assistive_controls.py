@@ -8,7 +8,6 @@ import cv2
 import numpy as np
 import pyautogui
 from faster_whisper import WhisperModel
-from PySide6.QtCore import QTimer
 from pycaw.pycaw import AudioUtilities
 
 from .action_service import ActionService
@@ -39,6 +38,7 @@ STATUS_PUSH_INTERVAL_S = 0.1
 # Lecturas fallidas seguidas (~1 s a 15 FPS) antes de dar la cámara por perdida.
 CAMERA_MAX_READ_FAILURES = 15
 CAMERA_RETRY_INTERVAL_S = 2.0
+CONTROL_THREAD_STOP_TIMEOUT_S = 8.0
 # Las velocidades del cursor del perfil están ajustadas a 15 FPS; se escalan por el tiempo
 # real entre fotogramas para que la velocidad no dependa de los FPS.
 REFERENCE_CURSOR_FPS = 15.0
@@ -62,6 +62,18 @@ AUDIO_RECORDING_PATH = os.path.join(
 )
 
 
+_whisper_models: dict[str, WhisperModel] = {}
+_whisper_lock = threading.Lock()
+
+
+def get_shared_whisper(model_size: str) -> WhisperModel:
+    """Un solo modelo por tamaño en todo el proceso: cargarlo tarda ~10 s y no cambia entre sesiones."""
+    with _whisper_lock:
+        if model_size not in _whisper_models:
+            _whisper_models[model_size] = WhisperModel(model_size, device="cpu", compute_type="int8")
+        return _whisper_models[model_size]
+
+
 class AssistiveController:
     def __init__(self, profile: dict, settings: dict, main_gui_interface=None):
         self.profile = profile
@@ -71,6 +83,7 @@ class AssistiveController:
         self.running = False
         self.control_thread = None
         self.voice_thread = None
+        self._stopped = False
 
         self.logger = SessionLogger(profile["name"])
         self.heuristics = HeuristicEngine(profile)
@@ -216,7 +229,7 @@ class AssistiveController:
 
     def _load_voice_model(self):
         try:
-            model = WhisperModel(self.voice_model_size, device="cpu", compute_type="int8")
+            model = get_shared_whisper(self.voice_model_size)
         except Exception as exc:
             self.voice_model_error = str(exc)
             self.voice_model_state = "error"
@@ -254,19 +267,25 @@ class AssistiveController:
         }
 
     def stop(self):
-        if not self.running:
+        """Libera todos los recursos. Es idempotente y sirve aunque nunca se haya iniciado."""
+        if self._stopped:
             return
+        self._stopped = True
         self.running = False
         self.state = AppState.STOPPED
         self.emergency_hotkey.stop()
         self._usage_summary_on_stop = self.stop_usage_recording()
+        # El hilo de control es el dueño de la cámara y de MediaPipe: hasta que termine no se tocan.
+        loop_finished = True
         if self.control_thread and self.control_thread.is_alive():
-            self.control_thread.join(timeout=3)
-        if self.cap and self.cap.isOpened():
-            self.cap.release()
+            self.control_thread.join(timeout=CONTROL_THREAD_STOP_TIMEOUT_S)
+            loop_finished = not self.control_thread.is_alive()
         if self.audio_level_monitor is not None:
             self.audio_level_monitor.stop()
-        self.provider.close()
+        if loop_finished:
+            self.provider.close()
+        else:
+            self.logger.log("error", "El bucle de cámara no terminó a tiempo")
         if self.tts:
             self.tts.stop()
         self.logger.log("session", "Fin de sesión", state=self.state.value)
@@ -330,6 +349,13 @@ class AssistiveController:
         self.hablar("Cursor recentrado.")
 
     def _main_loop(self):
+        try:
+            self._run_camera_loop()
+        finally:
+            if self.cap is not None:
+                self.cap.release()
+
+    def _run_camera_loop(self):
         frame_delay = 1.0 / max(int(self.settings.get("fps", 15)), 1)
         announced = False
         read_failures = 0
@@ -762,6 +788,8 @@ class AssistiveController:
                 vad_filter=True,
             )
             text = " ".join(segment.text.strip() for segment in segments).strip()
+            if not self.running:
+                return  # la sesión terminó mientras se transcribía: no ejecutar nada
             if not text:
                 self.logger.log("voice", "Sin audio reconocido")
                 self.last_voice_state = "sin audio reconocido"
@@ -856,12 +884,10 @@ class AssistiveController:
                 self.last_voice_state = "en espera"
 
     def _quit_from_action(self):
-        self.stop()
-        if self.main_gui_interface:
-            if hasattr(self.main_gui_interface, "_quit"):
-                QTimer.singleShot(0, self.main_gui_interface._quit)
-            elif hasattr(self.main_gui_interface, "close"):
-                QTimer.singleShot(0, self.main_gui_interface.close)
+        """El comando de voz "cerrar sistema" termina la sesión; quien la cierra es la interfaz."""
+        gui = self.main_gui_interface
+        if gui is not None and hasattr(gui, "run_on_ui_thread"):
+            gui.run_on_ui_thread(gui.request_end_session)
 
     def _render_overlay(self, frame_rgb, sample, control_state, prediction, compact: bool = False):
         """Dibuja la guía visual sobre una copia reducida del fotograma (RGB)."""
