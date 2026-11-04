@@ -132,7 +132,7 @@ class ShellTests(unittest.TestCase):
         return name
 
     def build(self, **settings) -> GiaMainWindow:
-        merged = {"preflight_on_start": False, "autostart_last_profile": True, "last_profile": None}
+        merged = {"preflight_on_start": False, "last_profile": None}
         merged.update(settings)
         self.window = GiaMainWindow(merged)
         self.window.show()
@@ -258,53 +258,37 @@ class ShellTests(unittest.TestCase):
         window.trainer.assistant_requested.emit(name)
         self.assertIsInstance(window.stack.currentWidget(), AssistantPage)
 
-    def test_autostart_counts_down_and_starts_last_profile(self):
+    def test_opening_gia_never_starts_a_session_by_itself(self):
         name = self.profile()
         window = self.build(last_profile=name)
-        window.begin()
-        self.assertTrue(window.home.autostart_active)
-        self.assertFalse(window.home.autostart_banner.isHidden())
-        window.home._countdown = 1
-        window.home._on_autostart_tick()
-        self.assertFalse(window.home.autostart_active)
-        self.assertIsNotNone(window.controller)
-
-    def test_autostart_can_be_cancelled_and_only_happens_when_it_should(self):
-        name, uncalibrated = self.profile(), self.profile(calibrated=False)
-        window = self.build(last_profile=name)
-        window.begin()
-        window.home.cancel_autostart()
-        self.assertFalse(window.home.autostart_active)
-        self.assertTrue(window.home.autostart_banner.isHidden())
-        pump(timeout_s=0.1)
+        self.assertEqual(window.home.selected_name(), name)
+        pump(timeout_s=0.2)
         self.assertIsNone(window.controller)
-        window.begin(autostart=False)
-        self.assertFalse(window.home.autostart_active)
-        window.settings["autostart_last_profile"] = False
-        window.begin()
-        self.assertFalse(window.home.autostart_active)
-        window.settings["autostart_last_profile"] = True
-        window.home.refresh(uncalibrated)
-        window.settings["last_profile"] = uncalibrated
-        window.begin()
-        self.assertFalse(window.home.autostart_active)
+        self.assertEqual(FakeController.instances, [])
+        self.assertIs(window.stack.currentWidget(), window.home)
 
-    def test_autostart_does_not_restart_after_ending_session(self):
+    def test_back_home_button_asks_and_ends_session(self):
         name = self.profile()
-        window = self.build(last_profile=name)
-        window.begin()
-        window.home._start_autostart_now()
-        window.end_session()
+        window = self.build()
+        window.start_assistant(name)
+        controller = window.controller
+        with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.No):
+            window.assistant.btn_home.click()
+        self.assertIs(window.controller, controller)
+        self.assertEqual(controller.stopped, 0)
+        with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            window.assistant.btn_home.click()
+        self.assertIs(window.stack.currentWidget(), window.home)
         self.wait_closed()
-        self.assertFalse(window.home.autostart_active)
-        self.assertEqual(len(FakeController.instances), 1)
+        self.assertEqual(controller.stopped, 1)
 
-    def test_user_action_cancels_autostart(self):
-        name = self.profile()
+    def test_open_trainer_at_launch_ignores_unknown_profile(self):
+        name = self.profile(calibrated=False)
         window = self.build(last_profile=name)
-        window.begin()
-        window.open_trainer(name)
-        self.assertFalse(window.home.autostart_active)
+        window.open_trainer_at_launch("no_existe_este_perfil")
+        self.assertIs(window.stack.currentWidget(), window.home)
+        window.open_trainer_at_launch(name)
+        self.assertIs(window.stack.currentWidget(), window.trainer)
 
     def test_home_offers_calibration_for_new_profile_and_start_for_ready_one(self):
         ready, new = self.profile(), self.profile(calibrated=False)

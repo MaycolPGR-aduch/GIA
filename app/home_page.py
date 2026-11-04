@@ -4,8 +4,8 @@ from __future__ import annotations
 import re
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QDialog,
     QHBoxLayout,
@@ -28,7 +28,6 @@ from app.config_store import (
 )
 from app.ui_widgets import Button, Card, StatusBadge, format_accuracy, format_date, make_label, populate_profile_list
 
-AUTOSTART_SECONDS = 5
 PROFILE_NAME_PATTERN = re.compile(r"^[\w][\w .()-]{0,39}$", re.UNICODE)
 
 
@@ -136,14 +135,7 @@ class HomePage(QWidget):
         self._inspectors: list[ModelInspector] = []
         self._busy = False
         self._loading_details = False
-        self._countdown = 0
-        self._autostart_name = ""
-        self._autostart_timer = QTimer(self)
-        self._autostart_timer.setInterval(1000)
-        self._autostart_timer.timeout.connect(self._on_autostart_tick)
         self._build_ui()
-        shortcut = QShortcut(QKeySequence("Esc"), self)
-        shortcut.activated.connect(self.cancel_autostart)
         self.refresh(settings.get("last_profile"))
 
     # ------------------------------------------------------------------ UI
@@ -173,20 +165,6 @@ class HomePage(QWidget):
         header.addWidget(btn_quit)
         layout.addLayout(header)
 
-        self.autostart_banner = Card(spacing=8)
-        banner_row = QHBoxLayout()
-        self.lbl_autostart = make_label("", role="h2", tone="accent", wrap=True)
-        banner_row.addWidget(self.lbl_autostart, 1)
-        btn_start_now = Button("Iniciar ahora", "play", variant="primary")
-        btn_start_now.clicked.connect(self._start_autostart_now)
-        banner_row.addWidget(btn_start_now)
-        btn_cancel_auto = Button("Cancelar (Esc)", "x")
-        btn_cancel_auto.clicked.connect(self.cancel_autostart)
-        banner_row.addWidget(btn_cancel_auto)
-        self.autostart_banner.body.addLayout(banner_row)
-        self.autostart_banner.setVisible(False)
-        layout.addWidget(self.autostart_banner)
-
         body = QHBoxLayout()
         body.setSpacing(14)
         layout.addLayout(body, 1)
@@ -194,8 +172,7 @@ class HomePage(QWidget):
         profiles = Card("Perfiles", "user")
         self.profile_list = QListWidget()
         self.profile_list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
-        self.profile_list.currentItemChanged.connect(self._on_user_selected_profile)
-        self.profile_list.itemPressed.connect(lambda _item: self.cancel_autostart())
+        self.profile_list.currentItemChanged.connect(self._on_profile_selected)
         self.profile_list.itemDoubleClicked.connect(lambda _item: self._run_primary_action())
         profiles.body.addWidget(self.profile_list, 1)
         self.btn_new = Button("Nuevo perfil", "plus")
@@ -264,10 +241,6 @@ class HomePage(QWidget):
         body.addWidget(self.empty_state, 2)
 
         footer = QHBoxLayout()
-        self.check_autostart = QCheckBox("Iniciar el asistente al abrir GIA con el último perfil usado")
-        self.check_autostart.setChecked(bool(self.settings.get("autostart_last_profile", True)))
-        self.check_autostart.toggled.connect(self._on_autostart_toggled)
-        footer.addWidget(self.check_autostart)
         footer.addStretch(1)
         self.lbl_busy = make_label("", role="h2", tone="info")
         footer.addWidget(self.lbl_busy)
@@ -285,17 +258,21 @@ class HomePage(QWidget):
         populate_profile_list(self.profile_list, summaries, current)
         self.profile_list.blockSignals(False)
         self._on_profile_selected()
+        self._scroll_to_selected()
 
-    def check_ready(self, name: str) -> bool:
-        return primary_action(get_profile_summary(name)) == "start"
+    def _scroll_to_selected(self):
+        item = self.profile_list.currentItem()
+        if item is not None:
+            self.profile_list.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Hasta que la lista tiene su tamaño final no se puede centrar el perfil seleccionado.
+        QTimer.singleShot(0, self._scroll_to_selected)
 
     def selected_name(self) -> str:
         item = self.profile_list.currentItem()
         return item.data(Qt.UserRole) if item is not None else ""
-
-    def _on_user_selected_profile(self, *_args):
-        self.cancel_autostart()
-        self._on_profile_selected()
 
     def _on_profile_selected(self, *_args):
         name = self.selected_name()
@@ -342,7 +319,6 @@ class HomePage(QWidget):
         name = self.selected_name()
         if self._loading_details or not name:
             return
-        self.cancel_autostart()
         profile = load_profile(name)
         profile[key] = bool(value)
         save_profile(profile)
@@ -376,7 +352,6 @@ class HomePage(QWidget):
         self._apply_busy_state()
 
     def create_profile(self):
-        self.cancel_autostart()
         dialog = NewProfileDialog(list_profiles(), self)
         if dialog.exec() != QDialog.Accepted:
             return
@@ -389,7 +364,6 @@ class HomePage(QWidget):
         name = self.selected_name()
         if not name:
             return
-        self.cancel_autostart()
         confirm = QMessageBox.question(
             self,
             "Eliminar perfil",
@@ -409,7 +383,6 @@ class HomePage(QWidget):
     def _run_primary_action(self):
         if self._busy or self._summary is None:
             return
-        self.cancel_autostart()
         name = self._summary["name"]
         if primary_action(self._summary) == "start":
             self.start_requested.emit(name)
@@ -417,17 +390,14 @@ class HomePage(QWidget):
             self.train_requested.emit(name)
 
     def _on_train_clicked(self):
-        self.cancel_autostart()
         if self.selected_name():
             self.train_requested.emit(self.selected_name())
 
     def _on_update_clicked(self):
-        self.cancel_autostart()
         if self.selected_name():
             self.update_requested.emit(self.selected_name())
 
     def _toggle_contrast(self):
-        self.cancel_autostart()
         self.btn_contrast.setChecked(theme.toggle_high_contrast(self.settings))
 
     def set_busy(self, text: str = ""):
@@ -441,44 +411,6 @@ class HomePage(QWidget):
             widget.setEnabled(not self._busy)
         self.profile_list.setEnabled(not self._busy)
 
-    # ------------------------------------------------------- inicio automático
-    def begin_autostart(self, name: str, seconds: int = AUTOSTART_SECONDS):
-        """Cuenta atrás cancelable para que no haga falta el ratón para empezar."""
-        self._autostart_name = name
-        self._countdown = seconds
-        self.autostart_banner.setVisible(True)
-        self._update_autostart_text()
-        self._autostart_timer.start()
-
-    @property
-    def autostart_active(self) -> bool:
-        return self._autostart_timer.isActive()
-
-    def cancel_autostart(self):
-        self._autostart_timer.stop()
-        self.autostart_banner.setVisible(False)
-
-    def _update_autostart_text(self):
-        self.lbl_autostart.setText(f"Iniciando el asistente con «{self._autostart_name}» en {self._countdown} s…")
-
-    def _on_autostart_tick(self):
-        self._countdown -= 1
-        if self._countdown <= 0:
-            self._start_autostart_now()
-        else:
-            self._update_autostart_text()
-
-    def _start_autostart_now(self):
-        self.cancel_autostart()
-        self.start_requested.emit(self._autostart_name)
-
-    def _on_autostart_toggled(self, enabled: bool):
-        self.settings["autostart_last_profile"] = bool(enabled)
-        save_settings(self.settings)
-        if not enabled:
-            self.cancel_autostart()
-
     def shutdown(self):
-        self.cancel_autostart()
         for inspector in list(self._inspectors):
             inspector.wait(5000)

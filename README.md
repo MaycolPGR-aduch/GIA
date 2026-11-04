@@ -22,9 +22,9 @@ Construir una base sólida para un sistema asistivo:
 
 La versión actual implementa:
 * **Aplicación única** (`main.py`): Una sola ventana con tres pantallas que comparten la cámara sin chocar.
-  * **Inicio**: perfiles, su estado y la acción recomendada para cada uno. Puede iniciar el asistente solo con el último perfil (con 5 s para cancelar).
+  * **Inicio**: perfiles, su estado y la acción recomendada para cada uno.
   * **Calibrar y entrenar**: diagnóstico de cámara y audio, guía de gestos, captura guiada y entrenamiento del modelo.
-  * **Asistente**: control facial en tiempo real, con el bucle de cámara en un hilo independiente para evitar bloqueos. Terminar la sesión vuelve al inicio.
+  * **Asistente**: control facial en tiempo real, con el bucle de cámara en un hilo independiente para evitar bloqueos. *Volver al inicio* termina la sesión.
 * **Modo Compacto Flotante**: Widget superior sin marco (`FramelessWindow`) con feed circular recortado de cámara, indicadores básicos y log compacto.
 * **Modelo Híbrido Temporal**: Extractor secuencial GRU (NumPy) y clasificación local con Regresión Logística.
 
@@ -92,7 +92,7 @@ Todo se hace desde la misma aplicación:
 ```powershell
 python main.py
 ```
-Opciones: `--no-autostart` no inicia el asistente automáticamente; `--train [PERFIL]` abre directamente *Calibrar y entrenar*.
+Opción: `--train [PERFIL]` abre directamente *Calibrar y entrenar*.
 
 Solo puede haber una GIA abierta a la vez. Los errores inesperados se guardan en `data/logs/errores_gia.log`.
 
@@ -105,7 +105,7 @@ Solo puede haber una GIA abierta a la vez. Los errores inesperados se guardan en
 
 ### 2. Fase de Uso Diario (Runtime Asistivo)
 * **Uso**:
-  1. En *Inicio*, selecciona el perfil calibrado y pulsa *Iniciar asistente*, o espera el inicio automático.
+  1. En *Inicio*, selecciona el perfil calibrado y pulsa *Iniciar asistente*.
   2. El asistente comenzará a mover el cursor según la posición de tu nariz.
   3. Ejecuta gestos faciales (guiños, cejas arriba, sonrisa) para hacer clics o pausar el sistema.
   4. Mantén ambos ojos cerrados (900 ms) para activar los comandos de voz de Whisper.

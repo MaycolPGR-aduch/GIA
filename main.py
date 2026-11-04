@@ -18,7 +18,6 @@ absl.logging.set_verbosity(absl.logging.ERROR)
 def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="GIA: control del computador con gestos faciales y voz.")
     parser.add_argument("--train", nargs="?", const="", default=None, metavar="PERFIL", help="abre Calibrar y entrenar")
-    parser.add_argument("--no-autostart", action="store_true", help="no iniciar el asistente automáticamente")
     return parser.parse_args(argv)
 
 
@@ -42,11 +41,8 @@ def main(argv: list[str] | None = None) -> int:
     window = GiaMainWindow(settings)
     reporter.error_occurred.connect(window.show_unexpected_error)
     window.show()
-    window.begin(
-        autostart=not arguments.no_autostart,
-        open_trainer=arguments.train is not None,
-        train_profile=arguments.train or None,
-    )
+    if arguments.train is not None:
+        window.open_trainer_at_launch(arguments.train or None)
     code = app.exec()
     lock.unlock()
     return code

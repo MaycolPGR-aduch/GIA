@@ -58,23 +58,11 @@ class GiaMainWindow(QMainWindow):
         self._restore_geometry()
 
     # --------------------------------------------------------------- arranque
-    def begin(self, *, autostart: bool = True, train_profile: str | None = None, open_trainer: bool = False):
-        """Lo primero que hace GIA al abrirse, ya con la ventana visible."""
-        if open_trainer:
-            names = list_profiles()
-            name = train_profile or self.settings.get("last_profile")
-            if name in names:
-                self.open_trainer(name)
-            return
-        last_profile = self.settings.get("last_profile")
-        if (
-            autostart
-            and self.settings.get("autostart_last_profile", True)
-            and last_profile
-            and self.home.selected_name() == last_profile
-            and self.home.check_ready(last_profile)
-        ):
-            self.home.begin_autostart(last_profile)
+    def open_trainer_at_launch(self, train_profile: str | None = None):
+        """Para `--train`: abre la calibración si el perfil existe; si no, se queda en el inicio."""
+        name = train_profile or self.settings.get("last_profile")
+        if name in list_profiles():
+            self.open_trainer(name)
 
     # -------------------------------------------------------------- navegación
     def _session_active(self) -> bool:
@@ -108,7 +96,6 @@ class GiaMainWindow(QMainWindow):
         self.setWindowTitle("GIA")
 
     def open_trainer(self, name: str, *, update_model: bool = False):
-        self.home.cancel_autostart()
         if self._session_active():
             return
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -127,7 +114,6 @@ class GiaMainWindow(QMainWindow):
             trainer.run_model_upgrade()
 
     def open_voice_commands(self):
-        self.home.cancel_autostart()
         dialog = VoiceCommandConfigDialog(self.settings, self)
         if dialog.exec():
             # Los ajustes se comparten por referencia entre pantallas: se actualizan en el sitio.
@@ -139,7 +125,6 @@ class GiaMainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ sesión
     def start_assistant(self, name: str):
-        self.home.cancel_autostart()
         if self._session_active() or not self._leave_trainer():
             return
         self._starting_session = True

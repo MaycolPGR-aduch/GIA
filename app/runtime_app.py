@@ -369,6 +369,10 @@ class AssistantPage(QWidget):
         layout.addWidget(self.recording_badge)
 
         layout.addSpacing(6)
+        btn_home = Button("Volver al inicio", "home", tooltip="Termina la sesión y vuelve a la pantalla de perfiles")
+        btn_home.clicked.connect(self._confirm_quit)
+        self.btn_home = btn_home
+        layout.addWidget(btn_home)
         self.btn_contrast = Button("", "contrast", variant="ghost", tooltip="Alto contraste (Ctrl+H)", checkable=True)
         self.btn_contrast.setChecked(theme.current_theme() == "high_contrast")
         self.btn_contrast.clicked.connect(self._toggle_contrast)
@@ -447,8 +451,6 @@ class AssistantPage(QWidget):
             "Grabar uso", "record", tooltip="Guarda puntos faciales y decisiones para analizar errores; sin video ni audio (Ctrl+G)"
         )
         self.btn_record.clicked.connect(self._toggle_usage_recording)
-        btn_close = Button("Terminar sesión", "power", variant="danger", tooltip="Termina la sesión y vuelve al inicio")
-        btn_close.clicked.connect(self._confirm_quit)
 
         grid.addWidget(self.btn_pause, 0, 0)
         grid.addWidget(self.btn_cursor, 0, 1)
@@ -458,8 +460,7 @@ class AssistantPage(QWidget):
         grid.addWidget(btn_guide, 2, 1)
         grid.addWidget(btn_voice_guide, 3, 0)
         grid.addWidget(btn_voice_test, 3, 1)
-        grid.addWidget(self.btn_record, 4, 0)
-        grid.addWidget(btn_close, 4, 1)
+        grid.addWidget(self.btn_record, 4, 0, 1, 2)
         card.body.addLayout(grid)
         return card
 
@@ -1008,7 +1009,7 @@ class AssistantPage(QWidget):
     def _confirm_quit(self):
         answer = QMessageBox.question(
             self,
-            "Terminar sesión",
+            "Volver al inicio",
             "¿Terminar la sesión y volver al inicio?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
